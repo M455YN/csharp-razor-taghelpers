@@ -1,0 +1,17 @@
+{
+  // Minimal launch config to run this extension in a new VS Code window.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "runtimeExecutable": "${execPath}",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}"
+      ],
+      "outFiles": []
+    }
+  ]
+}
+
