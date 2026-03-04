@@ -4,6 +4,7 @@ const vscode = require('vscode');
  * In-memory cache of discovered Tag Helpers.
  * Each item: {
  *   className,
+ *   baseClassName?,
  *   elementName,
  *   attributeName,
  *   file,
@@ -213,7 +214,8 @@ async function scanForTagHelpers() {
         }
 
         // Second lightweight pass: map [HtmlTargetElement("...")] attributes
-        // to the next TagHelper class declared below.
+        // to the next class declared below (not only *TagHelper – we also
+        // support derived helpers like GridModal : GridTagHelper).
         const classElementNames = {};
         let pendingElementName = null;
         for (let i = 0; i < lines.length; i++) {
@@ -227,7 +229,7 @@ async function scanForTagHelpers() {
             continue;
           }
 
-          const classDeclMatch = line.match(/class\s+(\w+TagHelper)\b/);
+          const classDeclMatch = line.match(/class\s+(\w+)\b/);
           if (classDeclMatch) {
             const cName = classDeclMatch[1];
             if (pendingElementName) {
@@ -237,10 +239,23 @@ async function scanForTagHelpers() {
           }
         }
 
-        const classRegex = /class\s+(\w+TagHelper)\b/g;
+        const classRegex = /class\s+(\w+)\s*(?::\s*([\w<>,\s]+))?/g;
         let match;
         while ((match = classRegex.exec(text)) !== null) {
           const className = match[1];
+          const baseClause = match[2] || '';
+          const baseClassName =
+            baseClause.split(/[<,\s]/).filter(Boolean)[0] || '';
+
+          const hasHtmlTarget = !!classElementNames[className];
+          const looksLikeTagHelper =
+            /TagHelper\b/.test(className) || /TagHelper\b/.test(baseClause);
+
+          // Only consider classes that either look like TagHelpers (by name/base type)
+          // or have an explicit [HtmlTargetElement] attribute.
+          if (!hasHtmlTarget && !looksLikeTagHelper) {
+            continue;
+          }
 
           // Prefer element name coming from [HtmlTargetElement("...")] directly
           // bound to this class; fall back to kebab-case class name.
@@ -271,6 +286,7 @@ async function scanForTagHelpers() {
 
           const entry = {
             className,
+            baseClassName: baseClassName || null,
             elementName,
             attributeName: elementName, // dla prostoty używamy tej samej nazwy
             file: uri.fsPath,
@@ -291,6 +307,39 @@ async function scanForTagHelpers() {
         console.error('[csharp-custom-taghelpers] Failed to read', uri.fsPath, err);
       }
     }
+  }
+
+  // After scanning all files, propagate attributes from base TagHelpers to
+  // derived TagHelpers when the derived one does not declare its own
+  // attributes. This allows helpers like:
+  //   [HtmlTargetElement("grid-modal")]
+  //   class GridModal : GridTagHelper { ... }
+  // to reuse all attributes from GridTagHelper.
+  const byClassName = Object.create(null);
+  for (const th of result) {
+    if (th && typeof th.className === 'string') {
+      byClassName[th.className] = th;
+    }
+  }
+
+  for (const th of result) {
+    if (
+      !th ||
+      !th.baseClassName ||
+      (th.attributes && th.attributes.length) ||
+      !byClassName[th.baseClassName]
+    ) {
+      continue;
+    }
+    const base = byClassName[th.baseClassName];
+    if (!base.attributes || !base.attributes.length) {
+      continue;
+    }
+    th.attributes = base.attributes.slice();
+    th.attributeSummaries = Object.assign(
+      {},
+      base.attributeSummaries || {}
+    );
   }
 
   return result;
