@@ -25,7 +25,17 @@
         "title": "C# Razor Tag Helpers: Refresh",
         "category": "C# Razor Tag Helpers"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "C# Razor Tag Helpers",
+      "properties": {
+        "csharpRazorTagHelpers.suppressCompletionsInStrings": {
+          "type": "boolean",
+          "default": true,
+          "description": "Suppress Tag Helper completions when the cursor is inside a double-quoted string (including C# verbatim strings like @\"...\")."
+        }
+      }
+    }
   },
 	"extensionDependencies": [
 		"ms-dotnettools.csharp"

@@ -16,6 +16,113 @@ let currentTagHelpers = [];
 let isScanning = false;
 let outputChannel = null;
 
+function isInsideDoubleQuotedString(textBeforeCursor, maxChars = 80000) {
+  const t =
+    typeof maxChars === 'number' && maxChars > 0 && textBeforeCursor.length > maxChars
+      ? textBeforeCursor.slice(-maxChars)
+      : textBeforeCursor;
+
+  let inRegular = false;
+  let inVerbatim = false;
+
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+
+    if (inRegular) {
+      if (ch === '\\') {
+        i += 1; // skip escaped char
+        continue;
+      }
+      if (ch === '"') {
+        inRegular = false;
+      }
+      continue;
+    }
+
+    if (inVerbatim) {
+      if (ch === '"') {
+        // In verbatim strings, "" is an escaped quote
+        if (t[i + 1] === '"') {
+          i += 1;
+          continue;
+        }
+        inVerbatim = false;
+      }
+      continue;
+    }
+
+    // Start of a verbatim string: @"
+    if (ch === '@' && t[i + 1] === '"') {
+      inVerbatim = true;
+      i += 1;
+      continue;
+    }
+
+    // Start of a regular string: "
+    if (ch === '"') {
+      inRegular = true;
+    }
+  }
+
+  return inRegular || inVerbatim;
+}
+
+function isInsideCSharpVerbatimString(textBeforeCursor) {
+  // Detects whether the cursor is currently inside a C# verbatim string literal:
+  //   @"..."
+  //   $@"..."
+  //   @$"..."
+  // This is used to suppress tag helper completions inside big SQL blocks that
+  // are embedded as verbatim strings in Razor attributes.
+  let inVerbatim = false;
+
+  for (let i = 0; i < textBeforeCursor.length; i++) {
+    const ch = textBeforeCursor[i];
+
+    if (!inVerbatim) {
+      // Start patterns:
+      // - @"   (verbatim)
+      // - $@"  (interpolated verbatim)
+      // - @$"  (interpolated verbatim)
+      if (ch === '@' && textBeforeCursor[i + 1] === '"') {
+        inVerbatim = true;
+        i += 1;
+        continue;
+      }
+      if (
+        ch === '$' &&
+        textBeforeCursor[i + 1] === '@' &&
+        textBeforeCursor[i + 2] === '"'
+      ) {
+        inVerbatim = true;
+        i += 2;
+        continue;
+      }
+      if (
+        ch === '@' &&
+        textBeforeCursor[i + 1] === '$' &&
+        textBeforeCursor[i + 2] === '"'
+      ) {
+        inVerbatim = true;
+        i += 2;
+        continue;
+      }
+      continue;
+    }
+
+    // In verbatim strings, "" is an escaped quote
+    if (ch === '"') {
+      if (textBeforeCursor[i + 1] === '"') {
+        i += 1;
+        continue;
+      }
+      inVerbatim = false;
+    }
+  }
+
+  return inVerbatim;
+}
+
 /**
  * Convert PascalCase / CamelCase name to kebab-case.
  * Example: "MyButton" -> "my-button", "HTMLInput" -> "html-input"
@@ -240,15 +347,43 @@ function registerCompletionProvider(context) {
           return [];
         }
 
-        const items = [];
-
         // Determine which tag we are inside (e.g. <frax ...|>), including multi-line tags.
         const textBeforeCursor = document.getText(
           new vscode.Range(new vscode.Position(0, 0), position)
         );
 
-        // Use the last '<' before the cursor (most reliable heuristic).
+        const cfg = vscode.workspace.getConfiguration(
+          'csharpRazorTagHelpers',
+          document.uri
+        );
+        const suppressInStrings = cfg.get(
+          'suppressCompletionsInStrings',
+          true
+        );
+        if (suppressInStrings && isInsideDoubleQuotedString(textBeforeCursor)) {
+          return [];
+        }
+
+        const items = [];
+
+        // Only offer tag helper completions when we're inside an open tag.
+        // If the last '>' is after the last '<', we are not inside a tag.
+        const lastGt = textBeforeCursor.lastIndexOf('>');
         const lastLt = textBeforeCursor.lastIndexOf('<');
+        if (lastLt === -1 || lastLt < lastGt) {
+          return [];
+        }
+
+        // Also suppress when we're inside a verbatim string literal inside this tag
+        // (common for SQL: select="@(@\"...")").
+        if (suppressInStrings) {
+          const openTagText = textBeforeCursor.substring(lastLt);
+          if (isInsideCSharpVerbatimString(openTagText)) {
+            return [];
+          }
+        }
+
+        // Use the last '<' before the cursor (most reliable heuristic).
         if (lastLt === -1) {
           return [];
         }
