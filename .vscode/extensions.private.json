@@ -1,0 +1,9 @@
+{
+  "registries": [
+    {
+      "name": "Verdaccio", 
+      "registry": "http://145.239.86.155:4873/",
+      "query": "csharp-razor-taghelpers"
+    }
+  ]
+}

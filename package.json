@@ -2,13 +2,17 @@
   "name": "csharp-razor-taghelpers",
   "displayName": "C# Razor Tag Helpers",
   "description": "Enhanced C# and .NET development in VS Code with IntelliSense and hover support for custom Razor Tag Helpers.",
-  "version": "1.0.2",
+  "version": "1.0.8",
   "publisher": "mafelt",
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
     "Programming Languages"
+  ],
+  "keywords": [
+    "vscode-extension",
+    "taghelpers"
   ],
   "main": "./extension.js",
   "activationEvents": [
@@ -37,10 +41,16 @@
       }
     }
   },
-	"extensionDependencies": [
-		"ms-dotnettools.csharp"
-	],
+  "extensionDependencies": [
+    "ms-dotnettools.csharp"
+  ],
+  "files": [
+    "extension.js",
+    "logo.png"
+  ],
   "scripts": {
+    "package": "vsce package",
+    "publish": "npm run package && npm publish",
     "lint": "echo \"No lint configured\"",
     "test": "echo \"No tests yet\""
   }

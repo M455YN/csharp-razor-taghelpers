@@ -309,12 +309,11 @@ async function scanForTagHelpers() {
     }
   }
 
-  // After scanning all files, propagate attributes from base TagHelpers to
-  // derived TagHelpers when the derived one does not declare its own
-  // attributes. This allows helpers like:
+  // After scanning all files, merge attributes from base TagHelpers into
+  // derived TagHelpers. This allows helpers like:
   //   [HtmlTargetElement("grid-modal")]
   //   class GridModal : GridTagHelper { ... }
-  // to reuse all attributes from GridTagHelper.
+  // to reuse all attributes from GridTagHelper **and** add their own.
   const byClassName = Object.create(null);
   for (const th of result) {
     if (th && typeof th.className === 'string') {
@@ -323,23 +322,46 @@ async function scanForTagHelpers() {
   }
 
   for (const th of result) {
-    if (
-      !th ||
-      !th.baseClassName ||
-      (th.attributes && th.attributes.length) ||
-      !byClassName[th.baseClassName]
-    ) {
+    if (!th || !th.baseClassName || !byClassName[th.baseClassName]) {
       continue;
     }
+
     const base = byClassName[th.baseClassName];
-    if (!base.attributes || !base.attributes.length) {
+    if (!Array.isArray(base.attributes) || !base.attributes.length) {
       continue;
     }
-    th.attributes = base.attributes.slice();
-    th.attributeSummaries = Object.assign(
+
+    const ownAttrs = Array.isArray(th.attributes) ? th.attributes : [];
+    const mergedAttrs = [];
+    const seen = new Set();
+
+    // 1) start with base attributes
+    for (const a of base.attributes) {
+      if (!seen.has(a)) {
+        seen.add(a);
+        mergedAttrs.push(a);
+      }
+    }
+    // 2) then add / override with derived attributes
+    for (const a of ownAttrs) {
+      if (!seen.has(a)) {
+        mergedAttrs.push(a);
+        seen.add(a);
+      }
+    }
+
+    th.attributes = mergedAttrs;
+
+    const mergedSummaries = Object.assign(
       {},
       base.attributeSummaries || {}
     );
+    if (th.attributeSummaries) {
+      for (const [key, val] of Object.entries(th.attributeSummaries)) {
+        mergedSummaries[key] = val;
+      }
+    }
+    th.attributeSummaries = mergedSummaries;
   }
 
   return result;
