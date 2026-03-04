@@ -105,23 +105,39 @@ async function scanForTagHelpers() {
           }
         }
 
+        // Second lightweight pass: map [HtmlTargetElement("...")] attributes
+        // to the next TagHelper class declared below.
+        const classElementNames = {};
+        let pendingElementName = null;
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+
+          const attrMatch = line.match(
+            /\[\s*HtmlTargetElement\s*\(\s*"(.*?)"/
+          );
+          if (attrMatch) {
+            pendingElementName = attrMatch[1];
+            continue;
+          }
+
+          const classDeclMatch = line.match(/class\s+(\w+TagHelper)\b/);
+          if (classDeclMatch) {
+            const cName = classDeclMatch[1];
+            if (pendingElementName) {
+              classElementNames[cName] = pendingElementName;
+              pendingElementName = null;
+            }
+          }
+        }
+
         const classRegex = /class\s+(\w+TagHelper)\b/g;
         let match;
         while ((match = classRegex.exec(text)) !== null) {
           const className = match[1];
 
-          // Try to read tag name from [HtmlTargetElement("grid")]
-          let elementName = '';
-          const attributeRegex = new RegExp(
-            `\\[\\s*HtmlTargetElement\\s*\\(\\s*"(.*?)"`,
-            'g'
-          );
-          let attrMatch;
-          while ((attrMatch = attributeRegex.exec(text)) !== null) {
-            // Take the first HtmlTargetElement in the file as a simple heuristic
-            elementName = attrMatch[1];
-            break;
-          }
+          // Prefer element name coming from [HtmlTargetElement("...")] directly
+          // bound to this class; fall back to kebab-case class name.
+          let elementName = classElementNames[className] || '';
 
           const baseName = className.replace(/TagHelper$/, '');
           if (!elementName) {
@@ -231,23 +247,34 @@ function registerCompletionProvider(context) {
           new vscode.Range(new vscode.Position(0, 0), position)
         );
 
-        // Find the last opened tag
-        const tagMatch = textBeforeCursor.match(
-          /<\s*([a-zA-Z0-9\-\:]+)[^<>]*$/m
-        );
-
-        // Check if we are still in the tag name part (e.g. "<gr|id")
-        let inTagName = false;
+        // Use the last '<' before the cursor (most reliable heuristic).
         const lastLt = textBeforeCursor.lastIndexOf('<');
-        if (lastLt !== -1) {
-          const afterLt = textBeforeCursor.substring(lastLt + 1);
-          // if there is no space after "<", we are still typing the tag name
-          inTagName = !afterLt.includes(' ');
+        if (lastLt === -1) {
+          return [];
         }
 
+        const afterLtRaw = textBeforeCursor.substring(lastLt + 1);
+        const afterLt = afterLtRaw.replace(/^\s*/, '');
+        if (!afterLt || afterLt.startsWith('/')) {
+          // closing tag or nothing meaningful
+          return [];
+        }
+
+        const nameMatch = afterLt.match(/^([a-zA-Z0-9\-\:]+)/);
+        if (!nameMatch) {
+          return [];
+        }
+
+        const tagName = nameMatch[1];
+        const restAfterName = afterLt.substring(tagName.length);
+        const inTagName = !/[\s>]/.test(restAfterName);
+
         // If we are in the tag name, show only the list of all elements (no attributes)
-        if (inTagName || !tagMatch) {
+        if (inTagName) {
           for (const th of currentTagHelpers) {
+            if (tagName && !th.elementName.startsWith(tagName)) {
+              continue;
+            }
             const elementItem = new vscode.CompletionItem(
               th.elementName,
               vscode.CompletionItemKind.Class
@@ -265,67 +292,50 @@ function registerCompletionProvider(context) {
         }
 
         // We are past the tag name, inside the attributes section – filter by the current tag
-        let activeHelpers = currentTagHelpers;
-        if (tagMatch && tagMatch[1]) {
-          const tagName = tagMatch[1];
-          const filtered = currentTagHelpers.filter(
-            (th) => th.elementName === tagName
-          );
-          if (filtered.length) {
-            activeHelpers = filtered;
-          }
+        const activeHelpers = currentTagHelpers.filter(
+          (th) => th.elementName === tagName
+        );
+        if (!activeHelpers.length) {
+          // Critical: do NOT fall back to all tag helpers here, otherwise
+          // attributes get mixed when we mis-detect the active tag.
+          return [];
         }
 
+        const seenAttrs = new Set();
         for (const th of activeHelpers) {
-          // Element completion: <grid>
-          const elementItem = new vscode.CompletionItem(
-            th.elementName,
-            vscode.CompletionItemKind.Class
-          );
-          elementItem.insertText = th.elementName;
-          elementItem.detail = `Tag Helper element (${th.className})`;
-          if (th.summary) {
-            elementItem.documentation = new vscode.MarkdownString(th.summary);
-          } else {
-            elementItem.documentation = th.file;
+          if (!Array.isArray(th.attributes)) {
+            continue;
           }
-
-          // Attributes based on TagHelper class properties
-          if (Array.isArray(th.attributes)) {
-            for (const attrName of th.attributes) {
-              const attrItem = new vscode.CompletionItem(
-                attrName,
-                vscode.CompletionItemKind.Property
-              );
-              // Insert attribute with ="", cursor placed inside quotes
-              attrItem.insertText = new vscode.SnippetString(
-                `${attrName}="$1"$0`
-              );
-              attrItem.detail = `Tag Helper attribute (${th.className})`;
-              const attrSummary =
-                th.attributeSummaries && th.attributeSummaries[attrName];
-              if (attrSummary) {
-                attrItem.documentation = new vscode.MarkdownString(
-                  attrSummary
-                );
-              } else {
-                attrItem.documentation = th.file;
-              }
-              items.push(attrItem);
+          for (const attrName of th.attributes) {
+            if (seenAttrs.has(attrName)) {
+              continue;
             }
-          }
+            seenAttrs.add(attrName);
 
-          items.push(elementItem);
+            const attrItem = new vscode.CompletionItem(
+              attrName,
+              vscode.CompletionItemKind.Property
+            );
+            // Insert attribute with ="", cursor placed inside quotes
+            attrItem.insertText = new vscode.SnippetString(
+              `${attrName}="$1"$0`
+            );
+            attrItem.detail = `Tag Helper attribute (${th.className})`;
+            const attrSummary =
+              th.attributeSummaries && th.attributeSummaries[attrName];
+            if (attrSummary) {
+              attrItem.documentation = new vscode.MarkdownString(attrSummary);
+            } else {
+              attrItem.documentation = th.file;
+            }
+            items.push(attrItem);
+          }
         }
 
         return items;
       }
     },
     '<',
-    'g',
-    'r',
-    'i',
-    'd',
     ' '
   );
 
