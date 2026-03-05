@@ -1,18 +1,15 @@
 {
   "name": "csharp-razor-taghelpers",
-  "displayName": "C# Razor Tag Helpers",
+  "displayName": "C# Razor Tag Helper Support",
   "description": "Enhanced C# and .NET development in VS Code with IntelliSense and hover support for custom Razor Tag Helpers.",
-  "version": "1.0.5",
-  "author": {
-    "name": "Mateusz Afelt",
-    "email": "m455yn@outlook.com"
-  },
-  "publisher": "m455yn",
+  "version": "1.0.7",
+  "publisher": "M455YN",
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
-    "Programming Languages"
+    "Programming Languages",
+    "Snippets"
   ],
   "keywords": [
     "vscode-extension",
@@ -30,17 +27,22 @@
     "commands": [
       {
         "command": "csharpRazorTagHelpers.refresh",
-        "title": "C# Razor Tag Helpers: Refresh",
-        "category": "C# Razor Tag Helpers"
+        "title": "C# Razor Tag Helper Support: Refresh",
+        "category": "C# Razor Tag Helper Support"
       }
     ],
     "configuration": {
-      "title": "C# Razor Tag Helpers",
+      "title": "C# Razor Tag Helper Support",
       "properties": {
         "csharpRazorTagHelpers.suppressCompletionsInStrings": {
           "type": "boolean",
           "default": true,
           "description": "Suppress Tag Helper completions when the cursor is inside a double-quoted string (including C# verbatim strings like @\"...\")."
+        },
+        "csharpRazorTagHelpers.autoTriggerEnumValueSuggestions": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically trigger completion for enum-based attribute values when typing opening quotes (e.g. layout-type=\"...\")."
         }
       }
     }
@@ -53,11 +55,7 @@
     "extension.js",
     "logo.png"
   ],
-  "publishConfig": {
-    "registry": "http://145.239.86.155:4873/"
-  },
   "scripts": {
-    "prepublishOnly": "vsce package -o csharp-razor-taghelpers.vsix",
     "lint": "echo \"No lint configured\"",
     "test": "echo \"No tests yet\""
   }

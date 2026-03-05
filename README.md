@@ -1,45 +1,70 @@
-# C# Razor Tag Helpers
+# C# Razor Tag Helper Support
 
-C# Razor Tag Helpers is an extension for Visual Studio Code that
-**extends the official C# extension** with support for **custom Tag
-Helpers** in Razor views (`.cshtml` / `.razor`).
+**C# Razor Tag Helper Support** is a Visual Studio Code extension that
+extends the official C# extension with additional support for **custom
+Razor Tag Helpers** in Razor views (`.cshtml` / `.razor`).
+
+The extension scans C# projects to detect Tag Helper classes and
+provides improved editor assistance when working with them.
 
 ------------------------------------------------------------------------
 
 ## Features
 
-### Automatic Tag Helper Detection
+### Automatic Tag Helper Discovery
 
--   Scans all `.cs` files in the current workspace
--   Finds classes ending with `TagHelper` (e.g., `GridTagHelper`)
--   Reads `[HtmlTargetElement("grid")]` to determine the tag name
--   Collects public `get; set;` properties as potential attributes
+-   Scans `.cs` files in the current workspace
+-   Detects classes that implement Razor Tag Helpers
+-   Resolves tag names from `HtmlTargetElement` attributes
+-   Extracts public properties to determine available attributes
 
 ### Tag Name IntelliSense
 
--   While typing a tag name (e.g., `<gr`), the extension suggests
-    available Tag Helpers (`grid`, `frax`, etc.)
--   Suggestions appear alongside those provided by the official C#
+-   Provides suggestions for detected Tag Helpers while typing HTML tags
+    in Razor views
+-   Integrates with the IntelliSense provided by the official C#
     extension
 
 ### Attribute IntelliSense
 
--   After typing a full tag name followed by a space (e.g., `<grid`):
-    -   The extension detects that you are inside the `grid` tag
-    -   It suggests only attributes belonging to that specific Tag
-        Helper (based on its class properties, e.g., `row-number-p`,
-        `empty-data-template`, etc.)
--   Selecting an attribute inserts a snippet in the form
-    `attribute-name=""` with the cursor placed inside the quotes
+-   Suggests attributes that belong to the detected Tag Helper
+-   Filters attribute suggestions based on the current tag
+-   Inserts attributes using snippets with the cursor positioned inside
+    quotes
 
-### Hover Documentation (Tooltips)
+### Hover Documentation
 
-If your C# code contains XML documentation comments
-(`/// <summary>...</summary>`):
-
--   Hovering over the tag name (e.g., `<grid>`) shows the summary from
-    the `*TagHelper` class
--   Hovering over an attribute (e.g., `row-number-p`) shows the summary
-    from the corresponding property
+-   Displays documentation for Tag Helpers and their attributes
+-   Uses XML documentation comments (`/// <summary>`) from the C# source
+    code
+-   Shows helpful tooltips directly in Razor files
 
 ------------------------------------------------------------------------
+
+## How It Works
+
+1.  The extension scans the workspace for `.cs` files.
+2.  Tag Helper classes are detected automatically.
+3.  Tag names and attributes are extracted from the C# code.
+4.  IntelliSense suggestions are provided inside Razor views.
+
+------------------------------------------------------------------------
+
+## Supported Files
+
+-   `.cshtml`
+-   `.razor`
+-   `.cs` (for Tag Helper detection)
+
+------------------------------------------------------------------------
+
+## Requirements
+
+-   Visual Studio Code
+-   The official **C# extension** installed
+
+------------------------------------------------------------------------
+
+## License
+
+MIT

@@ -1,16 +1,18 @@
 const vscode = require('vscode');
 
+
 /**
  * In-memory cache of discovered Tag Helpers.
  * Each item: {
- *   className,
- *   baseClassName?,
- *   elementName,
- *   attributeName,
- *   file,
- *   attributes: string[],
- *   summary?: string,
- *   attributeSummaries?: { [attrName: string]: string | undefined }
+ *   className,
+ *   baseClassName?,
+ *   elementName,
+ *   attributeName,
+ *   file,
+ *   attributes: string[],
+ *   summary?: string,
+ *   attributeSummaries?: { [attrName: string]: string | undefined },
+ *   valueSuggestions?: { [attrName: string]: string[] | undefined } // e.g. enum values
  * }
  */
 let currentTagHelpers = [];
@@ -70,9 +72,9 @@ function isInsideDoubleQuotedString(textBeforeCursor, maxChars = 80000) {
 
 function isInsideCSharpVerbatimString(textBeforeCursor) {
   // Detects whether the cursor is currently inside a C# verbatim string literal:
-  //   @"..."
-  //   $@"..."
-  //   @$"..."
+  //   @"..."
+  //   $@"..."
+  //   @$"..."
   // This is used to suppress tag helper completions inside big SQL blocks that
   // are embedded as verbatim strings in Razor attributes.
   let inVerbatim = false;
@@ -82,9 +84,9 @@ function isInsideCSharpVerbatimString(textBeforeCursor) {
 
     if (!inVerbatim) {
       // Start patterns:
-      // - @"   (verbatim)
-      // - $@"  (interpolated verbatim)
-      // - @$"  (interpolated verbatim)
+      // - @"   (verbatim)
+      // - $@"  (interpolated verbatim)
+      // - @$"  (interpolated verbatim)
       if (ch === '@' && textBeforeCursor[i + 1] === '"') {
         inVerbatim = true;
         i += 1;
@@ -138,7 +140,7 @@ function pascalToKebab(name) {
 /**
  * Scan workspace C# files for classes ending with "TagHelper".
  * Heuristic:
- *   class MyButtonTagHelper -> <my-button> and attributes based on public properties
+ *   class MyButtonTagHelper -> <my-button> and attributes based on public properties
  */
 async function scanForTagHelpers() {
   if (!vscode.workspace.workspaceFolders) {
@@ -148,9 +150,47 @@ async function scanForTagHelpers() {
   const result = [];
 
   if (outputChannel) {
-    outputChannel.appendLine('[KDR | C# Razor Tag Helpers] Starting scan for TagHelpers...');
+    outputChannel.appendLine('[C# Razor Tag Helper Support] Starting scan for TagHelpers...');
   }
 
+  // Global pass 1: collect all enum types and their values across the workspace
+  const globalEnumValues = Object.create(null);
+  for (const folder of vscode.workspace.workspaceFolders) {
+    const pattern = new vscode.RelativePattern(folder, '**/*.cs');
+    const files = await vscode.workspace.findFiles(pattern, '**/bin/**');
+
+    for (const uri of files) {
+      try {
+        const document = await vscode.workspace.openTextDocument(uri);
+        const text = document.getText();
+
+        const enumRegex = /public\s+enum\s+(\w+)\s*\{([\s\S]*?)\}/g;
+        let enumMatch;
+        while ((enumMatch = enumRegex.exec(text)) !== null) {
+          const enumName = enumMatch[1];
+          const body = enumMatch[2];
+          const values = [];
+
+          const memberRegex = /\b([A-Za-z_][A-Za-z0-9_]*)\s*(?:=.*?(?:,|\}|\s*$))/g;
+          let m2;
+          while ((m2 = memberRegex.exec(body)) !== null) {
+            const memberName = m2[1];
+            if (memberName === 'public' || memberName === 'enum') {
+              continue;
+            }
+            values.push(memberName);
+          }
+          if (values.length) {
+            globalEnumValues[enumName] = values;
+          }
+        }
+      } catch {
+        // ignore enum parse errors per file
+      }
+    }
+  }
+
+  // Global pass 2: scan TagHelpers with access to globalEnumValues
   for (const folder of vscode.workspace.workspaceFolders) {
     const pattern = new vscode.RelativePattern(folder, '**/*.cs');
     const files = await vscode.workspace.findFiles(pattern, '**/bin/**');
@@ -213,9 +253,8 @@ async function scanForTagHelpers() {
           }
         }
 
-        // Second lightweight pass: map [HtmlTargetElement("...")] attributes
-        // to the next class declared below (not only *TagHelper – we also
-        // support derived helpers like GridModal : GridTagHelper).
+        // Map [HtmlTargetElement("...")] attributes to the next class declared below
+        // (not only *TagHelper – we also support derived helpers like GridModal : GridTagHelper).
         const classElementNames = {};
         let pendingElementName = null;
         for (let i = 0; i < lines.length; i++) {
@@ -273,33 +312,49 @@ async function scanForTagHelpers() {
           const properties = [];
           const attributeSummaries = {};
           const propRegex =
-            /public\s+[\w<>\.\?\[\]\s]+\s+(\w+)\s*\{\s*get;\s*set;\s*\}/g;
+            /public\s+([\w<>\.\?\[\]\s]+)\s+(\w+)\s*\{\s*get;\s*set;\s*\}/g;
+          const valueSuggestions = {};
           let propMatch;
           while ((propMatch = propRegex.exec(text)) !== null) {
-            const propName = propMatch[1];
+            const propType = (propMatch[1] || '').trim();
+            const propName = propMatch[2];
             const kebabName = pascalToKebab(propName);
             properties.push(kebabName);
             if (propertySummaries[propName]) {
               attributeSummaries[kebabName] = propertySummaries[propName];
             }
+            // Enum-based value suggestions
+            if (propType) {
+              // Strip nullable marker and generic arguments, keep simple type name
+              const simpleType = propType
+                .replace(/\?$/, '')
+                .split(/[<>\s]/)
+                .filter(Boolean)
+                .pop();
+              if (simpleType && globalEnumValues[simpleType]) {
+                valueSuggestions[kebabName] = globalEnumValues[simpleType];
+              }
+            }
           }
+
 
           const entry = {
             className,
             baseClassName: baseClassName || null,
             elementName,
-            attributeName: elementName, // dla prostoty używamy tej samej nazwy
+            attributeName: elementName,
             file: uri.fsPath,
             attributes: properties,
             summary: classSummaries[className],
-            attributeSummaries
+            attributeSummaries,
+            valueSuggestions
           };
 
           result.push(entry);
 
           if (outputChannel) {
             outputChannel.appendLine(
-              `[KDR | C# Razor Tag Helpers] Found TagHelper: ${entry.className} -> <${entry.elementName}> (${entry.attributes.length} attributes) in ${entry.file}`
+              `[C# Razor Tag Helper Support] Found TagHelper: ${entry.className} -> <${entry.elementName}> (${entry.attributes.length} attributes) in ${entry.file}`
             );
           }
         }
@@ -309,11 +364,12 @@ async function scanForTagHelpers() {
     }
   }
 
-  // After scanning all files, merge attributes from base TagHelpers into
-  // derived TagHelpers. This allows helpers like:
-  //   [HtmlTargetElement("grid-modal")]
-  //   class GridModal : GridTagHelper { ... }
-  // to reuse all attributes from GridTagHelper **and** add their own.
+  // After scanning all files, merge attributes defined in base TagHelpers into
+  // derived TagHelpers. This allows a derived helper to inherit all attributes
+  // from its base helper while still defining its own additional attributes.
+  // Example: if class DerivedTagHelper : BaseTagHelper, then DerivedTagHelper
+  // will support attributes declared in BaseTagHelper as well as those defined
+  // directly in DerivedTagHelper.
   const byClassName = Object.create(null);
   for (const th of result) {
     if (th && typeof th.className === 'string') {
@@ -362,6 +418,18 @@ async function scanForTagHelpers() {
       }
     }
     th.attributeSummaries = mergedSummaries;
+
+    // Merge valueSuggestions (e.g. enum values) in the same way:
+    const mergedValues = Object.assign(
+      {},
+      base.valueSuggestions || {}
+    );
+    if (th.valueSuggestions) {
+      for (const [key, val] of Object.entries(th.valueSuggestions)) {
+        mergedValues[key] = val;
+      }
+    }
+    th.valueSuggestions = mergedValues;
   }
 
   return result;
@@ -379,17 +447,17 @@ async function refreshTagHelpers(showNotification = false) {
 
     if (outputChannel) {
       outputChannel.appendLine(
-        `[KDR | C# Razor Tag Helpers] Scan finished. Total TagHelpers: ${found.length}`
+        `[C# Razor Tag Helper Support] Scan finished. Total TagHelpers: ${found.length}`
       );
     }
 
     if (showNotification) {
       vscode.window.showInformationMessage(
-        `KDR | C# Razor Tag Helpers: found ${found.length} TagHelper class(es).`
+        `C# Razor Tag Helper Support: found ${found.length} TagHelper class(es).`
       );
     }
   } catch (err) {
-    console.error('[KDR | C# Razor Tag Helpers] Scan failed', err);
+    console.error('[C# Razor Tag Helper Support] Scan failed', err);
     if (showNotification) {
       vscode.window.showErrorMessage('C# Tag Helpers: scan failed, see console for details.');
     }
@@ -410,6 +478,18 @@ function registerCompletionProvider(context) {
     { language: 'aspnetcorerazor' }
   ];
 
+  // Build trigger characters dynamically based on configuration
+  const cfg = vscode.workspace.getConfiguration('csharpRazorTagHelpers');
+  const autoTriggerEnumValues = cfg.get(
+    'autoTriggerEnumValueSuggestions',
+    true
+  );
+
+  const triggerCharacters = ['<', ' ', '='];
+  if (autoTriggerEnumValues) {
+    triggerCharacters.push('"');
+  }
+
   const provider = vscode.languages.registerCompletionItemProvider(
     selector,
     {
@@ -423,17 +503,6 @@ function registerCompletionProvider(context) {
           new vscode.Range(new vscode.Position(0, 0), position)
         );
 
-        const cfg = vscode.workspace.getConfiguration(
-          'csharpRazorTagHelpers',
-          document.uri
-        );
-        const suppressInStrings = cfg.get(
-          'suppressCompletionsInStrings',
-          true
-        );
-        if (suppressInStrings && isInsideDoubleQuotedString(textBeforeCursor)) {
-          return [];
-        }
 
         const items = [];
 
@@ -447,6 +516,14 @@ function registerCompletionProvider(context) {
 
         // Also suppress when we're inside a verbatim string literal inside this tag
         // (common for SQL: select="@(@\"...")").
+        const cfg = vscode.workspace.getConfiguration(
+          'csharpRazorTagHelpers',
+          document.uri
+        );
+        const suppressInStrings = cfg.get(
+          'suppressCompletionsInStrings',
+          true
+        );
         if (suppressInStrings) {
           const openTagText = textBeforeCursor.substring(lastLt);
           if (isInsideCSharpVerbatimString(openTagText)) {
@@ -507,6 +584,42 @@ function registerCompletionProvider(context) {
           return [];
         }
 
+        // Check if we are inside an attribute value for a known attribute
+        const openTagText = textBeforeCursor.substring(lastLt);
+        const valueAttrMatch = openTagText.match(
+          /([a-zA-Z0-9\-\:]+)\s*=\s*["'][^"']*$/
+        );
+        if (valueAttrMatch) {
+          const valueAttrName = valueAttrMatch[1];
+          const valueItems = [];
+          const seenValues = new Set();
+
+          for (const th of activeHelpers) {
+            const vs = th.valueSuggestions || {};
+            const vals = vs[valueAttrName];
+            if (!Array.isArray(vals) || !vals.length) {
+              return []; //continue;
+            }
+            for (const v of vals) {
+              if (seenValues.has(v)) {
+                continue;
+              }
+              seenValues.add(v);
+              const valItem = new vscode.CompletionItem(
+                v,
+                vscode.CompletionItemKind.EnumMember
+              );
+              valItem.insertText = v;
+              valItem.detail = `Value for ${valueAttrName} (${th.className})`;
+              valueItems.push(valItem);
+            }
+          }
+
+          if (valueItems.length) {
+            return valueItems;
+          }
+        }
+
         const seenAttrs = new Set();
         for (const th of activeHelpers) {
           if (!Array.isArray(th.attributes)) {
@@ -541,8 +654,7 @@ function registerCompletionProvider(context) {
         return items;
       }
     },
-    '<',
-    ' '
+    ...triggerCharacters
   );
 
   context.subscriptions.push(provider);
@@ -552,8 +664,8 @@ function registerCompletionProvider(context) {
  * VS Code entrypoint.
  */
 async function activate(context) {
-  outputChannel = vscode.window.createOutputChannel('KDR | C# Razor Tag Helpers');
-  outputChannel.appendLine('[KDR | C# Razor Tag Helpers] Extension activated.');
+  outputChannel = vscode.window.createOutputChannel('C# Razor Tag Helper Support');
+  outputChannel.appendLine('[C# Razor Tag Helper Support] Extension activated.');
   // Initial scan
   refreshTagHelpers(false);
 
@@ -631,4 +743,3 @@ module.exports = {
   activate,
   deactivate
 };
-
