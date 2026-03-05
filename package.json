@@ -2,21 +2,21 @@
   "name": "csharp-razor-taghelpers",
   "displayName": "C# Razor Tag Helper Support",
   "description": "Enhanced C# and .NET development in VS Code with IntelliSense and hover support for custom Razor Tag Helpers.",
-  "version": "1.0.8",
+  "version": "1.1.0",
   "publisher": "M455YN",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/M455YN/csharp-razor-taghelpers"
-  },
-  "homepage": "https://github.com/M455YN/csharp-razor-taghelpers",
-  "engines": {
-    "vscode": "^1.80.0"
+  "author": {
+    "name": "Mateusz Afelt"
   },
   "categories": [
     "Programming Languages",
     "Snippets"
   ],
+  "icon": "logo.png",
+  "galleryBanner": {
+    "color": "#512BD4",
+    "theme": "dark"
+  },
+  "pricing": "Free",
   "keywords": [
     "razor",
     "taghelpers",
@@ -24,17 +24,18 @@
     "aspnet",
     "aspnetcore",
     "csharp",
-    "razor-pages",
-    "vscode-extension"
+    "razor-pages"
   ],
-  "main": "./extension.js",
   "activationEvents": [
     "onLanguage:razor",
     "onLanguage:aspnetcorerazor",
     "onLanguage:csharp",
     "onStartupFinished"
   ],
-  "icon": "logo.png",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "main": "./extension.js",
   "contributes": {
     "commands": [
       {
@@ -64,10 +65,20 @@
   ],
   "files": [
     "extension.js",
-    "logo.png"
+    "logo.png",
+    "README.md"
   ],
   "scripts": {
     "lint": "echo \"No lint configured\"",
     "test": "echo \"No tests yet\""
-  }
+  },
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/M455YN/csharp-razor-taghelpers/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/M455YN/csharp-razor-taghelpers"
+  },
+  "homepage": "https://github.com/M455YN/csharp-razor-taghelpers"
 }
