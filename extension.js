@@ -15,9 +15,24 @@ const vscode = require('vscode');
  *   valueSuggestions?: { [attrName: string]: string[] | undefined } // e.g. enum values
  * }
  */
+const CS_EXCLUDE_GLOB = '{**/bin/**,**/obj/**,**/node_modules/**}';
+
 let currentTagHelpers = [];
 let isScanning = false;
 let outputChannel = null;
+let rescanTimeout = null;
+
+function debounce(fn, ms) {
+  return function () {
+    if (rescanTimeout) {
+      clearTimeout(rescanTimeout);
+    }
+    rescanTimeout = setTimeout(() => {
+      rescanTimeout = null;
+      fn();
+    }, ms);
+  };
+}
 
 function isInsideDoubleQuotedString(textBeforeCursor, maxChars = 80000) {
   const t =
@@ -153,52 +168,54 @@ async function scanForTagHelpers() {
     outputChannel.appendLine('[C# Razor Tag Helper Support] Starting scan for TagHelpers...');
   }
 
-  // Global pass 1: collect all enum types and their values across the workspace
-  const globalEnumValues = Object.create(null);
+  // Collect all .cs file URIs (exclude bin, obj, node_modules for speed)
+  const allUris = [];
   for (const folder of vscode.workspace.workspaceFolders) {
     const pattern = new vscode.RelativePattern(folder, '**/*.cs');
-    const files = await vscode.workspace.findFiles(pattern, '**/bin/**');
+    const files = await vscode.workspace.findFiles(
+      pattern,
+      CS_EXCLUDE_GLOB
+    );
+    allUris.push(...files);
+  }
 
-    for (const uri of files) {
-      try {
-        const document = await vscode.workspace.openTextDocument(uri);
-        const text = document.getText();
+  // Single read pass: each file is read once; we build enum cache and store content for TagHelper extraction
+  const globalEnumValues = Object.create(null);
+  const fileDataList = [];
 
-        const enumRegex = /public\s+enum\s+(\w+)\s*\{([\s\S]*?)\}/g;
-        let enumMatch;
-        while ((enumMatch = enumRegex.exec(text)) !== null) {
-          const enumName = enumMatch[1];
-          const body = enumMatch[2];
-          const values = [];
+  for (const uri of allUris) {
+    try {
+      const document = await vscode.workspace.openTextDocument(uri);
+      const text = document.getText();
 
-          const memberRegex = /\b([A-Za-z_][A-Za-z0-9_]*)\s*(?:=.*?(?:,|\}|\s*$))/g;
-          let m2;
-          while ((m2 = memberRegex.exec(body)) !== null) {
-            const memberName = m2[1];
-            if (memberName === 'public' || memberName === 'enum') {
-              continue;
-            }
-            values.push(memberName);
-          }
-          if (values.length) {
-            globalEnumValues[enumName] = values;
-          }
+      // Extract enums (in-memory cache for value suggestions)
+      const enumRegex = /public\s+enum\s+(\w+)\s*\{([\s\S]*?)\}/g;
+      let enumMatch;
+      while ((enumMatch = enumRegex.exec(text)) !== null) {
+        const enumName = enumMatch[1];
+        const body = enumMatch[2];
+        const values = [];
+        const memberRegex = /\b([A-Za-z_][A-Za-z0-9_]*)\s*(?:=.*?(?:,|\}|\s*$))/g;
+        let m2;
+        while ((m2 = memberRegex.exec(body)) !== null) {
+          const memberName = m2[1];
+          if (memberName === 'public' || memberName === 'enum') continue;
+          values.push(memberName);
         }
-      } catch {
-        // ignore enum parse errors per file
+        if (values.length) {
+          globalEnumValues[enumName] = values;
+        }
       }
+
+      fileDataList.push({ uri, text });
+    } catch {
+      // ignore per-file errors
     }
   }
 
-  // Global pass 2: scan TagHelpers with access to globalEnumValues
-  for (const folder of vscode.workspace.workspaceFolders) {
-    const pattern = new vscode.RelativePattern(folder, '**/*.cs');
-    const files = await vscode.workspace.findFiles(pattern, '**/bin/**');
-
-    for (const uri of files) {
-      try {
-        const document = await vscode.workspace.openTextDocument(uri);
-        const text = document.getText();
+  // TagHelper extraction from cached content (no second file read)
+  for (const { uri, text } of fileDataList) {
+    try {
 
         // First pass over lines, collecting /// <summary> for classes and properties
         const lines = text.split(/\r?\n/);
@@ -253,8 +270,8 @@ async function scanForTagHelpers() {
           }
         }
 
-        // Map [HtmlTargetElement("...")] attributes to the next class declared below
-        // (not only *TagHelper – we also support derived helpers like GridModal : GridTagHelper).
+        // Map [HtmlTargetElement("...")] attributes to the next class declared below 
+        // (supports both standard TagHelpers and derived helper classes).
         const classElementNames = {};
         let pendingElementName = null;
         for (let i = 0; i < lines.length; i++) {
@@ -358,9 +375,8 @@ async function scanForTagHelpers() {
             );
           }
         }
-      } catch (err) {
-        console.error('[csharp-custom-taghelpers] Failed to read', uri.fsPath, err);
-      }
+    } catch (err) {
+      console.error('[csharp-custom-taghelpers] Failed to read', uri.fsPath, err);
     }
   }
 
@@ -451,11 +467,10 @@ async function refreshTagHelpers(showNotification = false) {
       );
     }
 
-    if (showNotification) {
-      vscode.window.showInformationMessage(
-        `C# Razor Tag Helper Support: found ${found.length} TagHelper class(es).`
-      );
-    }
+    // Notification in the bottom right corner of VS Code after the scan is complete
+    vscode.window.showInformationMessage(
+      `C# Razor Tag Helpers: ${found.length} TagHelpers found.`
+    );
   } catch (err) {
     console.error('[C# Razor Tag Helper Support] Scan failed', err);
     if (showNotification) {
@@ -498,7 +513,7 @@ function registerCompletionProvider(context) {
           return [];
         }
 
-        // Determine which tag we are inside (e.g. <frax ...|>), including multi-line tags.
+        // Determine which tag we are inside (e.g. <tag ...|>), including multi-line tags.
         const textBeforeCursor = document.getText(
           new vscode.Range(new vscode.Position(0, 0), position)
         );
@@ -679,6 +694,16 @@ async function activate(context) {
 
   context.subscriptions.push(refreshCommand);
 
+  // Auto-rescan after changes in .cs files (debounced)
+  const debouncedRefresh = debounce(() => {
+    refreshTagHelpers(false);
+  }, 800);
+  const csWatcher = vscode.workspace.createFileSystemWatcher('**/*.cs');
+  csWatcher.onDidChange(debouncedRefresh);
+  csWatcher.onDidCreate(debouncedRefresh);
+  csWatcher.onDidDelete(debouncedRefresh);
+  context.subscriptions.push(csWatcher);
+
   // Completion provider for Razor
   registerCompletionProvider(context);
 
@@ -704,7 +729,7 @@ async function activate(context) {
 
       const word = document.getText(range);
 
-      // 1) Spróbuj dopasować jako nazwę elementu
+      // 1) Try matching as an element name
       const asElement = currentTagHelpers.find(
         (th) => th.elementName === word
       );
@@ -714,7 +739,7 @@ async function activate(context) {
         );
       }
 
-      // 2) Spróbuj dopasować jako atrybut dowolnego Tag Helpera
+      // 2) Try matching as an attribute of any Tag Helper
       for (const th of currentTagHelpers) {
         if (!th.attributes || !th.attributes.includes(word)) {
           continue;

@@ -2,7 +2,7 @@
   "name": "csharp-razor-taghelpers",
   "displayName": "C# Razor Tag Helper Support",
   "description": "Enhanced C# and .NET development in VS Code with IntelliSense and hover support for custom Razor Tag Helpers.",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "publisher": "M455YN",
   "author": {
     "name": "Mateusz Afelt"
