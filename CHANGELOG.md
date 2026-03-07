@@ -4,6 +4,19 @@ All notable changes to the **C# Razor Tag Helper Support** extension are documen
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] - 2026-03-07
+
+### Added
+
+- **AST-based parsing:** Tag Helpers are now discovered using the C# Language Server (`DocumentSymbol` tree / Roslyn) when available. Properties are correctly scoped to their class, so attributes are no longer mixed when multiple Tag Helper classes live in one file. Regex-based extraction remains as a fallback when the language server has not yet analyzed a file.
+- **Boolean value suggestions:** Attributes whose type is `bool` or `Boolean` (including `System.Boolean`) now get `true` and `false` as value suggestions, in the same way enum properties get their enum members.
+- **Auto-open value list after attribute insert:** When you complete an attribute that has value suggestions (bool or enum), the value suggestion list now opens automatically after the snippet is inserted (cursor between the quotes), so you can pick `true`/`false` or an enum value without typing `"` or invoking suggest manually.
+- **Delayed rescan on startup:** A second scan runs ~4.5 s after activation so the C# Language Server has time to provide symbols. The first scan may use regex; the second uses AST when the LS is ready. See the Output channel “C# Razor Tag Helper Support” for “(AST)” vs “(regex)” per file.
+
+### Fixed
+
+- Value suggestions (enum or bool) did not appear when the first Tag Helper matching the current tag had no value suggestions for that attribute; the provider now aggregates suggestions from all matching helpers instead of returning early.
+
 ## [1.1.1] - 2026-03-06
 
 ### Added
@@ -74,6 +87,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Command **C# Razor Tag Helpers: Refresh** to rescan Tag Helpers manually.
 - Output channel **C# Razor Tag Helper Support** for scan progress and results.
 
+[Unreleased]: https://github.com/M455YN/csharp-razor-taghelpers/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/M455YN/csharp-razor-taghelpers/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/M455YN/csharp-razor-taghelpers/compare/v1.0.5...v1.1.0
 [1.0.5]: https://github.com/M455YN/csharp-razor-taghelpers/compare/v1.0.2...v1.0.5
 [1.0.2]: https://github.com/M455YN/csharp-razor-taghelpers/compare/v1.0.0...v1.0.2

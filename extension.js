@@ -152,10 +152,371 @@ function pascalToKebab(name) {
     .toLowerCase();
 }
 
+/** True if the C# type string is bool (e.g. "bool", "Boolean", "System.Boolean"). */
+function isBooleanType(typeName) {
+  if (!typeName || typeof typeName !== 'string') return false;
+  const t = typeName.trim();
+  return t === 'bool' || t === 'Boolean' || t.endsWith('.Boolean');
+}
+
+// ─── AST helpers ─────────────────────────────────────────────────────────────
+
+/**
+ * Scan backwards from lineIndex to extract the text of the nearest
+ * `/// <summary>...</summary>` block, skipping over `[Attribute]` lines and
+ * blank lines that may sit between the doc-comment and the declaration.
+ */
+function extractDocCommentBefore(lines, lineIndex) {
+  let i = lineIndex - 1;
+
+  // Skip attribute decorators and blank lines
+  while (i >= 0) {
+    const t = lines[i].trim();
+    if (t === '' || t.startsWith('[')) { i--; continue; }
+    break;
+  }
+
+  if (i < 0 || !lines[i].trim().match(/\/\/\/\s*<\/summary>/)) {
+    return undefined;
+  }
+  i--;
+
+  const bodyLines = [];
+  while (i >= 0) {
+    const t = lines[i].trim();
+    const startMatch = t.match(/\/\/\/\s*<summary>\s*(.*)?/);
+    if (startMatch) {
+      if (startMatch[1]) bodyLines.unshift(startMatch[1].trim());
+      break;
+    }
+    const midMatch = t.match(/\/\/\/\s*(.*)/);
+    if (midMatch) bodyLines.unshift(midMatch[1].trim());
+    else break;
+    i--;
+  }
+
+  return bodyLines.filter(Boolean).join(' ').trim() || undefined;
+}
+
+/**
+ * Scan backwards from lineIndex to find the nearest
+ * `[HtmlTargetElement("tag-name")]` that belongs to this declaration,
+ * skipping blank lines and other attribute decorators.
+ */
+function extractHtmlTargetElementBefore(lines, lineIndex) {
+  for (let i = lineIndex - 1; i >= 0; i--) {
+    const t = lines[i].trim();
+    if (t === '' || t.startsWith('///')) continue;
+    const m = t.match(/\[\s*HtmlTargetElement\s*\(\s*"(.*?)"/);
+    if (m) return m[1];
+    if (!t.startsWith('[')) break;
+  }
+  return null;
+}
+
+/**
+ * Populate globalEnumValues from a DocumentSymbol tree (AST path).
+ * Works recursively so enums nested inside namespaces or classes are found.
+ */
+function collectEnumsFromSymbols(symbolList, globalEnumValues) {
+  for (const sym of symbolList || []) {
+    if (sym.kind === vscode.SymbolKind.Enum) {
+      const values = (sym.children || [])
+        .filter(c => c.kind === vscode.SymbolKind.EnumMember)
+        .map(c => c.name);
+      if (values.length) {
+        globalEnumValues[sym.name] = values;
+      }
+    }
+    if (sym.children && sym.children.length) {
+      collectEnumsFromSymbols(sym.children, globalEnumValues);
+    }
+  }
+}
+
+/**
+ * Populate globalEnumValues from raw text (regex fallback, used when the
+ * language server has not yet provided symbols for this file).
+ */
+function collectEnumsFromText(text, globalEnumValues) {
+  const enumRegex = /public\s+enum\s+(\w+)\s*\{([\s\S]*?)\}/g;
+  let enumMatch;
+  while ((enumMatch = enumRegex.exec(text)) !== null) {
+    const enumName = enumMatch[1];
+    const body = enumMatch[2];
+    const values = [];
+    const memberRegex = /\b([A-Za-z_][A-Za-z0-9_]*)\s*(?:=.*?(?:,|\}|\s*$))/g;
+    let m2;
+    while ((m2 = memberRegex.exec(body)) !== null) {
+      const memberName = m2[1];
+      if (memberName === 'public' || memberName === 'enum') continue;
+      values.push(memberName);
+    }
+    if (values.length) {
+      globalEnumValues[enumName] = values;
+    }
+  }
+}
+
+/**
+ * AST-based TagHelper extraction using a DocumentSymbol tree from the
+ * C# language server.  Properties are correctly scoped to their parent class
+ * because the symbol tree already encodes the hierarchy – this avoids the
+ * regex fallback's bug of mixing properties across multiple classes in one file.
+ */
+function parseTagHelpersFromSymbols(uri, text, symbols, globalEnumValues) {
+  const lines = text.split(/\r?\n/);
+  const result = [];
+
+  function walkSymbols(symbolList) {
+    for (const sym of symbolList || []) {
+      // Recurse into namespaces / modules without treating them as TagHelpers
+      if (
+        sym.kind === vscode.SymbolKind.Namespace ||
+        sym.kind === vscode.SymbolKind.Module
+      ) {
+        walkSymbols(sym.children);
+        continue;
+      }
+
+      if (sym.kind !== vscode.SymbolKind.Class) continue;
+
+      const className = sym.name;
+      const classLine = sym.selectionRange.start.line;
+
+      // Read the actual declaration line to extract the base-class clause.
+      // (DocumentSymbol.detail is not guaranteed to contain inheritance info
+      // across both OmniSharp and the new Roslyn-based extension.)
+      const declLine = lines[classLine] || '';
+      const baseClauseMatch = declLine.match(/class\s+\w[\w<>]*\s*:\s*([\w<>,\s]+)/);
+      const baseClause = baseClauseMatch ? baseClauseMatch[1].trim() : '';
+      const baseClassName = baseClause.split(/[<,\s]/).filter(Boolean)[0] || '';
+
+      const htmlTargetElement = extractHtmlTargetElementBefore(lines, classLine);
+
+      const isTagHelper =
+        /TagHelper\b/.test(className) ||
+        /TagHelper\b/.test(baseClause) ||
+        htmlTargetElement !== null;
+
+      if (!isTagHelper) {
+        walkSymbols(sym.children);
+        continue;
+      }
+
+      let elementName = htmlTargetElement || '';
+      if (!elementName) {
+        const baseName = className.replace(/TagHelper$/, '');
+        if (!baseName) { walkSymbols(sym.children); continue; }
+        elementName = pascalToKebab(baseName);
+      }
+
+      // Properties come from sym.children – correctly scoped to THIS class only
+      const attributes = [];
+      const attributeSummaries = {};
+      const valueSuggestions = {};
+
+      for (const child of sym.children || []) {
+        if (child.kind !== vscode.SymbolKind.Property) continue;
+
+        const propName = child.name;
+        // The C# LS puts the property type in DocumentSymbol.detail
+        const propType = (child.detail || '').trim();
+        const kebabName = pascalToKebab(propName);
+
+        attributes.push(kebabName);
+
+        const propDoc = extractDocCommentBefore(lines, child.selectionRange.start.line);
+        if (propDoc) attributeSummaries[kebabName] = propDoc;
+
+        if (propType) {
+          const simpleType = propType
+            .replace(/\?$/, '')
+            .split(/[<>\s]/)
+            .filter(Boolean)
+            .pop();
+          if (isBooleanType(simpleType)) {
+            valueSuggestions[kebabName] = ['true', 'false'];
+          } else if (simpleType && globalEnumValues[simpleType]) {
+            valueSuggestions[kebabName] = globalEnumValues[simpleType];
+          }
+        }
+      }
+
+      const summary = extractDocCommentBefore(lines, classLine);
+
+      result.push({
+        className,
+        baseClassName: baseClassName || null,
+        elementName,
+        attributeName: elementName,
+        file: uri.fsPath,
+        attributes,
+        summary,
+        attributeSummaries,
+        valueSuggestions
+      });
+
+      if (outputChannel) {
+        outputChannel.appendLine(
+          `[C# Razor Tag Helper Support] Found TagHelper (AST): ${className} -> <${elementName}> (${attributes.length} attributes) in ${uri.fsPath}`
+        );
+      }
+
+      walkSymbols(sym.children);
+    }
+  }
+
+  walkSymbols(symbols);
+  return result;
+}
+
+/**
+ * Regex-based TagHelper extraction (fallback for when the language server has
+ * not yet provided document symbols for a file).
+ *
+ * Known limitation: propRegex runs on the entire file text, so if multiple
+ * TagHelper classes live in one file their properties can be mixed.  The AST
+ * path above does not have this problem.
+ */
+function parseTagHelpersWithRegex(uri, text, globalEnumValues) {
+  const lines = text.split(/\r?\n/);
+  const result = [];
+
+  // Pass 1 – collect /// <summary> for classes and properties
+  const classSummaries = {};
+  const propertySummaries = {};
+  let pendingSummary = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const summaryStart = line.match(/\/\/\/\s*<summary>\s*(.*)?/);
+    if (summaryStart) {
+      const summaryLines = [];
+      if (summaryStart[1]) summaryLines.push(summaryStart[1].trim());
+      let j = i + 1;
+      for (; j < lines.length; j++) {
+        const l = lines[j];
+        if (l.match(/\/\/\/\s*<\/summary>/)) break;
+        const mid = l.match(/\/\/\/\s*(.*)/);
+        if (mid) summaryLines.push(mid[1].trim());
+      }
+      pendingSummary = summaryLines.join(' ').trim();
+      i = j;
+      continue;
+    }
+    if (pendingSummary) {
+      const classMatch = line.match(/class\s+(\w+TagHelper)\b/);
+      if (classMatch) {
+        classSummaries[classMatch[1]] = pendingSummary;
+        pendingSummary = null;
+        continue;
+      }
+      const propMatch = line.match(
+        /public\s+[\w<>\.\?\[\]\s]+\s+(\w+)\s*\{\s*get;\s*set;\s*\}/
+      );
+      if (propMatch) {
+        propertySummaries[propMatch[1]] = pendingSummary;
+        pendingSummary = null;
+        continue;
+      }
+    }
+  }
+
+  // Pass 2 – map [HtmlTargetElement("...")] to the class below it
+  const classElementNames = {};
+  let pendingElementName = null;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const attrMatch = line.match(/\[\s*HtmlTargetElement\s*\(\s*"(.*?)"/);
+    if (attrMatch) { pendingElementName = attrMatch[1]; continue; }
+    const classDeclMatch = line.match(/class\s+(\w+)\b/);
+    if (classDeclMatch) {
+      const cName = classDeclMatch[1];
+      if (pendingElementName) {
+        classElementNames[cName] = pendingElementName;
+        pendingElementName = null;
+      }
+    }
+  }
+
+  // Pass 3 – extract classes and their properties
+  const classRegex = /class\s+(\w+)\s*(?::\s*([\w<>,\s]+))?/g;
+  let match;
+  while ((match = classRegex.exec(text)) !== null) {
+    const className = match[1];
+    const baseClause = match[2] || '';
+    const baseClassName = baseClause.split(/[<,\s]/).filter(Boolean)[0] || '';
+
+    const hasHtmlTarget = !!classElementNames[className];
+    const looksLikeTagHelper =
+      /TagHelper\b/.test(className) || /TagHelper\b/.test(baseClause);
+
+    if (!hasHtmlTarget && !looksLikeTagHelper) continue;
+
+    let elementName = classElementNames[className] || '';
+    const baseName = className.replace(/TagHelper$/, '');
+    if (!elementName) {
+      if (!baseName) continue;
+      elementName = pascalToKebab(baseName);
+    }
+
+    const attributes = [];
+    const attributeSummaries = {};
+    const propRegex =
+      /public\s+([\w<>\.\?\[\]\s]+)\s+(\w+)\s*\{\s*get;\s*set;\s*\}/g;
+    const valueSuggestions = {};
+    let propMatch;
+    while ((propMatch = propRegex.exec(text)) !== null) {
+      const propType = (propMatch[1] || '').trim();
+      const propName = propMatch[2];
+      const kebabName = pascalToKebab(propName);
+      attributes.push(kebabName);
+      if (propertySummaries[propName]) {
+        attributeSummaries[kebabName] = propertySummaries[propName];
+      }
+      if (propType) {
+        const simpleType = propType
+          .replace(/\?$/, '')
+          .split(/[<>\s]/)
+          .filter(Boolean)
+          .pop();
+        if (isBooleanType(simpleType)) {
+          valueSuggestions[kebabName] = ['true', 'false'];
+        } else if (simpleType && globalEnumValues[simpleType]) {
+          valueSuggestions[kebabName] = globalEnumValues[simpleType];
+        }
+      }
+    }
+
+    result.push({
+      className,
+      baseClassName: baseClassName || null,
+      elementName,
+      attributeName: elementName,
+      file: uri.fsPath,
+      attributes,
+      summary: classSummaries[className],
+      attributeSummaries,
+      valueSuggestions
+    });
+
+    if (outputChannel) {
+      outputChannel.appendLine(
+        `[C# Razor Tag Helper Support] Found TagHelper (regex): ${className} -> <${elementName}> (${attributes.length} attributes) in ${uri.fsPath}`
+      );
+    }
+  }
+
+  return result;
+}
+
+// ─── Main scanner ─────────────────────────────────────────────────────────────
+
 /**
  * Scan workspace C# files for classes ending with "TagHelper".
- * Heuristic:
- *   class MyButtonTagHelper -> <my-button> and attributes based on public properties
+ * Primary path: DocumentSymbol tree from the C# language server (Roslyn AST).
+ * Fallback: regex scanning (used per-file when the LS has not yet analysed it).
  */
 async function scanForTagHelpers() {
   if (!vscode.workspace.workspaceFolders) {
@@ -172,14 +533,12 @@ async function scanForTagHelpers() {
   const allUris = [];
   for (const folder of vscode.workspace.workspaceFolders) {
     const pattern = new vscode.RelativePattern(folder, '**/*.cs');
-    const files = await vscode.workspace.findFiles(
-      pattern,
-      CS_EXCLUDE_GLOB
-    );
+    const files = await vscode.workspace.findFiles(pattern, CS_EXCLUDE_GLOB);
     allUris.push(...files);
   }
 
-  // Single read pass: each file is read once; we build enum cache and store content for TagHelper extraction
+  // Pass 1 – open every file, collect enums (needed before TagHelper extraction
+  // because a property type may reference an enum defined in a different file).
   const globalEnumValues = Object.create(null);
   const fileDataList = [];
 
@@ -188,204 +547,46 @@ async function scanForTagHelpers() {
       const document = await vscode.workspace.openTextDocument(uri);
       const text = document.getText();
 
-      // Extract enums (in-memory cache for value suggestions)
-      const enumRegex = /public\s+enum\s+(\w+)\s*\{([\s\S]*?)\}/g;
-      let enumMatch;
-      while ((enumMatch = enumRegex.exec(text)) !== null) {
-        const enumName = enumMatch[1];
-        const body = enumMatch[2];
-        const values = [];
-        const memberRegex = /\b([A-Za-z_][A-Za-z0-9_]*)\s*(?:=.*?(?:,|\}|\s*$))/g;
-        let m2;
-        while ((m2 = memberRegex.exec(body)) !== null) {
-          const memberName = m2[1];
-          if (memberName === 'public' || memberName === 'enum') continue;
-          values.push(memberName);
-        }
-        if (values.length) {
-          globalEnumValues[enumName] = values;
-        }
+      // Try AST-based enum collection first
+      let symbols = null;
+      try {
+        symbols = await vscode.commands.executeCommand(
+          'vscode.executeDocumentSymbolProvider',
+          uri
+        );
+      } catch { /* language server not ready yet */ }
+
+      if (symbols && symbols.length) {
+        collectEnumsFromSymbols(symbols, globalEnumValues);
+      } else {
+        collectEnumsFromText(text, globalEnumValues);
       }
 
-      fileDataList.push({ uri, text });
+      fileDataList.push({ uri, text, symbols });
     } catch {
       // ignore per-file errors
     }
   }
 
-  // TagHelper extraction from cached content (no second file read)
-  for (const { uri, text } of fileDataList) {
+  // Pass 2 – extract TagHelpers using globally resolved enum values
+  for (const { uri, text, symbols } of fileDataList) {
     try {
-
-        // First pass over lines, collecting /// <summary> for classes and properties
-        const lines = text.split(/\r?\n/);
-        const classSummaries = {};
-        const propertySummaries = {};
-        let pendingSummary = null;
-
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i];
-
-          // Start summary
-          const summaryStart = line.match(/\/\/\/\s*<summary>\s*(.*)?/);
-          if (summaryStart) {
-            const summaryLines = [];
-            if (summaryStart[1]) {
-              summaryLines.push(summaryStart[1].trim());
-            }
-            let j = i + 1;
-            for (; j < lines.length; j++) {
-              const l = lines[j];
-              const end = l.match(/\/\/\/\s*<\/summary>/);
-              if (end) {
-                break;
-              }
-              const mid = l.match(/\/\/\/\s*(.*)/);
-              if (mid) {
-                summaryLines.push(mid[1].trim());
-              }
-            }
-            pendingSummary = summaryLines.join(' ').trim();
-            i = j;
-            continue;
-          }
-
-          // After a summary we expect either a class or a property
-          if (pendingSummary) {
-            const classMatch = line.match(/class\s+(\w+TagHelper)\b/);
-            if (classMatch) {
-              classSummaries[classMatch[1]] = pendingSummary;
-              pendingSummary = null;
-              continue;
-            }
-
-            const propMatch = line.match(
-              /public\s+[\w<>\.\?\[\]\s]+\s+(\w+)\s*\{\s*get;\s*set;\s*\}/
-            );
-            if (propMatch) {
-              propertySummaries[propMatch[1]] = pendingSummary;
-              pendingSummary = null;
-              continue;
-            }
-          }
-        }
-
-        // Map [HtmlTargetElement("...")] attributes to the next class declared below 
-        // (supports both standard TagHelpers and derived helper classes).
-        const classElementNames = {};
-        let pendingElementName = null;
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i];
-
-          const attrMatch = line.match(
-            /\[\s*HtmlTargetElement\s*\(\s*"(.*?)"/
-          );
-          if (attrMatch) {
-            pendingElementName = attrMatch[1];
-            continue;
-          }
-
-          const classDeclMatch = line.match(/class\s+(\w+)\b/);
-          if (classDeclMatch) {
-            const cName = classDeclMatch[1];
-            if (pendingElementName) {
-              classElementNames[cName] = pendingElementName;
-              pendingElementName = null;
-            }
-          }
-        }
-
-        const classRegex = /class\s+(\w+)\s*(?::\s*([\w<>,\s]+))?/g;
-        let match;
-        while ((match = classRegex.exec(text)) !== null) {
-          const className = match[1];
-          const baseClause = match[2] || '';
-          const baseClassName =
-            baseClause.split(/[<,\s]/).filter(Boolean)[0] || '';
-
-          const hasHtmlTarget = !!classElementNames[className];
-          const looksLikeTagHelper =
-            /TagHelper\b/.test(className) || /TagHelper\b/.test(baseClause);
-
-          // Only consider classes that either look like TagHelpers (by name/base type)
-          // or have an explicit [HtmlTargetElement] attribute.
-          if (!hasHtmlTarget && !looksLikeTagHelper) {
-            continue;
-          }
-
-          // Prefer element name coming from [HtmlTargetElement("...")] directly
-          // bound to this class; fall back to kebab-case class name.
-          let elementName = classElementNames[className] || '';
-
-          const baseName = className.replace(/TagHelper$/, '');
-          if (!elementName) {
-            if (!baseName) {
-              continue;
-            }
-            elementName = pascalToKebab(baseName);
-          }
-
-          // Collect public properties as potential attributes
-          const properties = [];
-          const attributeSummaries = {};
-          const propRegex =
-            /public\s+([\w<>\.\?\[\]\s]+)\s+(\w+)\s*\{\s*get;\s*set;\s*\}/g;
-          const valueSuggestions = {};
-          let propMatch;
-          while ((propMatch = propRegex.exec(text)) !== null) {
-            const propType = (propMatch[1] || '').trim();
-            const propName = propMatch[2];
-            const kebabName = pascalToKebab(propName);
-            properties.push(kebabName);
-            if (propertySummaries[propName]) {
-              attributeSummaries[kebabName] = propertySummaries[propName];
-            }
-            // Enum-based value suggestions
-            if (propType) {
-              // Strip nullable marker and generic arguments, keep simple type name
-              const simpleType = propType
-                .replace(/\?$/, '')
-                .split(/[<>\s]/)
-                .filter(Boolean)
-                .pop();
-              if (simpleType && globalEnumValues[simpleType]) {
-                valueSuggestions[kebabName] = globalEnumValues[simpleType];
-              }
-            }
-          }
-
-
-          const entry = {
-            className,
-            baseClassName: baseClassName || null,
-            elementName,
-            attributeName: elementName,
-            file: uri.fsPath,
-            attributes: properties,
-            summary: classSummaries[className],
-            attributeSummaries,
-            valueSuggestions
-          };
-
-          result.push(entry);
-
-          if (outputChannel) {
-            outputChannel.appendLine(
-              `[C# Razor Tag Helper Support] Found TagHelper: ${entry.className} -> <${entry.elementName}> (${entry.attributes.length} attributes) in ${entry.file}`
-            );
-          }
-        }
+      let entries;
+      if (symbols && symbols.length) {
+        entries = parseTagHelpersFromSymbols(uri, text, symbols, globalEnumValues);
+      } else {
+        entries = parseTagHelpersWithRegex(uri, text, globalEnumValues);
+      }
+      result.push(...entries);
     } catch (err) {
-      console.error('[csharp-custom-taghelpers] Failed to read', uri.fsPath, err);
+      console.error('[csharp-custom-taghelpers] Failed to parse', uri.fsPath, err);
     }
   }
+
 
   // After scanning all files, merge attributes defined in base TagHelpers into
   // derived TagHelpers. This allows a derived helper to inherit all attributes
   // from its base helper while still defining its own additional attributes.
-  // Example: if class DerivedTagHelper : BaseTagHelper, then DerivedTagHelper
-  // will support attributes declared in BaseTagHelper as well as those defined
-  // directly in DerivedTagHelper.
   const byClassName = Object.create(null);
   for (const th of result) {
     if (th && typeof th.className === 'string') {
@@ -407,14 +608,12 @@ async function scanForTagHelpers() {
     const mergedAttrs = [];
     const seen = new Set();
 
-    // 1) start with base attributes
     for (const a of base.attributes) {
       if (!seen.has(a)) {
         seen.add(a);
         mergedAttrs.push(a);
       }
     }
-    // 2) then add / override with derived attributes
     for (const a of ownAttrs) {
       if (!seen.has(a)) {
         mergedAttrs.push(a);
@@ -424,10 +623,7 @@ async function scanForTagHelpers() {
 
     th.attributes = mergedAttrs;
 
-    const mergedSummaries = Object.assign(
-      {},
-      base.attributeSummaries || {}
-    );
+    const mergedSummaries = Object.assign({}, base.attributeSummaries || {});
     if (th.attributeSummaries) {
       for (const [key, val] of Object.entries(th.attributeSummaries)) {
         mergedSummaries[key] = val;
@@ -435,11 +631,7 @@ async function scanForTagHelpers() {
     }
     th.attributeSummaries = mergedSummaries;
 
-    // Merge valueSuggestions (e.g. enum values) in the same way:
-    const mergedValues = Object.assign(
-      {},
-      base.valueSuggestions || {}
-    );
+    const mergedValues = Object.assign({}, base.valueSuggestions || {});
     if (th.valueSuggestions) {
       for (const [key, val] of Object.entries(th.valueSuggestions)) {
         mergedValues[key] = val;
@@ -613,7 +805,7 @@ function registerCompletionProvider(context) {
             const vs = th.valueSuggestions || {};
             const vals = vs[valueAttrName];
             if (!Array.isArray(vals) || !vals.length) {
-              return []; //continue;
+              continue;
             }
             for (const v of vals) {
               if (seenValues.has(v)) {
@@ -662,6 +854,18 @@ function registerCompletionProvider(context) {
             } else {
               attrItem.documentation = th.file;
             }
+            // If any active helper has value suggestions (bool/enum) for this attr, trigger suggest after insert so the user gets true/false or enum list
+            let hasValueSuggestions = false;
+            for (const h of activeHelpers) {
+              const vs = (h.valueSuggestions || {})[attrName];
+              if (Array.isArray(vs) && vs.length) {
+                hasValueSuggestions = true;
+                break;
+              }
+            }
+            if (hasValueSuggestions) {
+              attrItem.command = { command: 'editor.action.triggerSuggest', title: '' };
+            }
             items.push(attrItem);
           }
         }
@@ -681,8 +885,18 @@ function registerCompletionProvider(context) {
 async function activate(context) {
   outputChannel = vscode.window.createOutputChannel('C# Razor Tag Helper Support');
   outputChannel.appendLine('[C# Razor Tag Helper Support] Extension activated.');
-  // Initial scan
+  // Initial scan (C# LS often not ready yet → regex fallback)
   refreshTagHelpers(false);
+
+  // Delayed rescan so C# Language Server can provide AST; then we get (AST) instead of (regex)
+  const AST_RESCAN_DELAY_MS = 4500;
+  const astRescanTimer = setTimeout(() => {
+    if (outputChannel) {
+      outputChannel.appendLine('[C# Razor Tag Helper Support] Rescanning with C# Language Server (AST)...');
+    }
+    refreshTagHelpers(false);
+  }, AST_RESCAN_DELAY_MS);
+  context.subscriptions.push({ dispose: () => clearTimeout(astRescanTimer) });
 
   // Command to refresh manually
   const refreshCommand = vscode.commands.registerCommand(
