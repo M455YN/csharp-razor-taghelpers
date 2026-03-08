@@ -4,6 +4,24 @@ All notable changes to the **C# Razor Tag Helper Support** extension are documen
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.4] - 2026-03-08
+
+### Added
+
+- **Completion on new line:** Attribute suggestions now appear when typing the first character of an attribute on a new line (e.g. after Enter in a multi-line `<grid>`). Trigger characters now include letters (a–z, A–Z), digits (0–9), and hyphen, in addition to `<`, space, `=`, and `"`.
+- **Attribute name filtering:** When typing a partial attribute name (e.g. `lay`), the list shows only attributes that start with that prefix (e.g. `layout-template`).
+
+### Changed
+
+- **Regex-only scanning:** The C# Language Server (DocumentSymbol / AST) path has been removed. Tag Helpers are discovered only via regex over `.cs` files. This avoids mixed or typed labels (e.g. `row-number-p : boolean`) from the C# provider; our completions show attribute names without types.
+- **Attribute value suggestions:** In attribute value context we suggest only valid values: for enum properties – enum members; for bool – `true`/`false`. For string (or other) attributes we no longer suggest other attribute names inside the value; we return no suggestions there.
+- **Completion order:** Our element, attribute, and value items use `sortText` so they sort first in the list (ahead of other providers).
+
+### Removed
+
+- AST-based Tag Helper extraction and delayed “rescan with C# Language Server” on startup.
+- Dependency on `vscode.executeDocumentSymbolProvider` for scanning.
+
 ## [1.1.2] - 2026-03-07
 
 ### Added

@@ -159,84 +159,8 @@ function isBooleanType(typeName) {
   return t === 'bool' || t === 'Boolean' || t.endsWith('.Boolean');
 }
 
-// ─── AST helpers ─────────────────────────────────────────────────────────────
-
 /**
- * Scan backwards from lineIndex to extract the text of the nearest
- * `/// <summary>...</summary>` block, skipping over `[Attribute]` lines and
- * blank lines that may sit between the doc-comment and the declaration.
- */
-function extractDocCommentBefore(lines, lineIndex) {
-  let i = lineIndex - 1;
-
-  // Skip attribute decorators and blank lines
-  while (i >= 0) {
-    const t = lines[i].trim();
-    if (t === '' || t.startsWith('[')) { i--; continue; }
-    break;
-  }
-
-  if (i < 0 || !lines[i].trim().match(/\/\/\/\s*<\/summary>/)) {
-    return undefined;
-  }
-  i--;
-
-  const bodyLines = [];
-  while (i >= 0) {
-    const t = lines[i].trim();
-    const startMatch = t.match(/\/\/\/\s*<summary>\s*(.*)?/);
-    if (startMatch) {
-      if (startMatch[1]) bodyLines.unshift(startMatch[1].trim());
-      break;
-    }
-    const midMatch = t.match(/\/\/\/\s*(.*)/);
-    if (midMatch) bodyLines.unshift(midMatch[1].trim());
-    else break;
-    i--;
-  }
-
-  return bodyLines.filter(Boolean).join(' ').trim() || undefined;
-}
-
-/**
- * Scan backwards from lineIndex to find the nearest
- * `[HtmlTargetElement("tag-name")]` that belongs to this declaration,
- * skipping blank lines and other attribute decorators.
- */
-function extractHtmlTargetElementBefore(lines, lineIndex) {
-  for (let i = lineIndex - 1; i >= 0; i--) {
-    const t = lines[i].trim();
-    if (t === '' || t.startsWith('///')) continue;
-    const m = t.match(/\[\s*HtmlTargetElement\s*\(\s*"(.*?)"/);
-    if (m) return m[1];
-    if (!t.startsWith('[')) break;
-  }
-  return null;
-}
-
-/**
- * Populate globalEnumValues from a DocumentSymbol tree (AST path).
- * Works recursively so enums nested inside namespaces or classes are found.
- */
-function collectEnumsFromSymbols(symbolList, globalEnumValues) {
-  for (const sym of symbolList || []) {
-    if (sym.kind === vscode.SymbolKind.Enum) {
-      const values = (sym.children || [])
-        .filter(c => c.kind === vscode.SymbolKind.EnumMember)
-        .map(c => c.name);
-      if (values.length) {
-        globalEnumValues[sym.name] = values;
-      }
-    }
-    if (sym.children && sym.children.length) {
-      collectEnumsFromSymbols(sym.children, globalEnumValues);
-    }
-  }
-}
-
-/**
- * Populate globalEnumValues from raw text (regex fallback, used when the
- * language server has not yet provided symbols for this file).
+ * Populate globalEnumValues from raw C# text (regex).
  */
 function collectEnumsFromText(text, globalEnumValues) {
   const enumRegex = /public\s+enum\s+(\w+)\s*\{([\s\S]*?)\}/g;
@@ -259,125 +183,7 @@ function collectEnumsFromText(text, globalEnumValues) {
 }
 
 /**
- * AST-based TagHelper extraction using a DocumentSymbol tree from the
- * C# language server.  Properties are correctly scoped to their parent class
- * because the symbol tree already encodes the hierarchy – this avoids the
- * regex fallback's bug of mixing properties across multiple classes in one file.
- */
-function parseTagHelpersFromSymbols(uri, text, symbols, globalEnumValues) {
-  const lines = text.split(/\r?\n/);
-  const result = [];
-
-  function walkSymbols(symbolList) {
-    for (const sym of symbolList || []) {
-      // Recurse into namespaces / modules without treating them as TagHelpers
-      if (
-        sym.kind === vscode.SymbolKind.Namespace ||
-        sym.kind === vscode.SymbolKind.Module
-      ) {
-        walkSymbols(sym.children);
-        continue;
-      }
-
-      if (sym.kind !== vscode.SymbolKind.Class) continue;
-
-      const className = sym.name;
-      const classLine = sym.selectionRange.start.line;
-
-      // Read the actual declaration line to extract the base-class clause.
-      // (DocumentSymbol.detail is not guaranteed to contain inheritance info
-      // across both OmniSharp and the new Roslyn-based extension.)
-      const declLine = lines[classLine] || '';
-      const baseClauseMatch = declLine.match(/class\s+\w[\w<>]*\s*:\s*([\w<>,\s]+)/);
-      const baseClause = baseClauseMatch ? baseClauseMatch[1].trim() : '';
-      const baseClassName = baseClause.split(/[<,\s]/).filter(Boolean)[0] || '';
-
-      const htmlTargetElement = extractHtmlTargetElementBefore(lines, classLine);
-
-      const isTagHelper =
-        /TagHelper\b/.test(className) ||
-        /TagHelper\b/.test(baseClause) ||
-        htmlTargetElement !== null;
-
-      if (!isTagHelper) {
-        walkSymbols(sym.children);
-        continue;
-      }
-
-      let elementName = htmlTargetElement || '';
-      if (!elementName) {
-        const baseName = className.replace(/TagHelper$/, '');
-        if (!baseName) { walkSymbols(sym.children); continue; }
-        elementName = pascalToKebab(baseName);
-      }
-
-      // Properties come from sym.children – correctly scoped to THIS class only
-      const attributes = [];
-      const attributeSummaries = {};
-      const valueSuggestions = {};
-
-      for (const child of sym.children || []) {
-        if (child.kind !== vscode.SymbolKind.Property) continue;
-
-        const propName = child.name;
-        // The C# LS puts the property type in DocumentSymbol.detail
-        const propType = (child.detail || '').trim();
-        const kebabName = pascalToKebab(propName);
-
-        attributes.push(kebabName);
-
-        const propDoc = extractDocCommentBefore(lines, child.selectionRange.start.line);
-        if (propDoc) attributeSummaries[kebabName] = propDoc;
-
-        if (propType) {
-          const simpleType = propType
-            .replace(/\?$/, '')
-            .split(/[<>\s]/)
-            .filter(Boolean)
-            .pop();
-          if (isBooleanType(simpleType)) {
-            valueSuggestions[kebabName] = ['true', 'false'];
-          } else if (simpleType && globalEnumValues[simpleType]) {
-            valueSuggestions[kebabName] = globalEnumValues[simpleType];
-          }
-        }
-      }
-
-      const summary = extractDocCommentBefore(lines, classLine);
-
-      result.push({
-        className,
-        baseClassName: baseClassName || null,
-        elementName,
-        attributeName: elementName,
-        file: uri.fsPath,
-        attributes,
-        summary,
-        attributeSummaries,
-        valueSuggestions
-      });
-
-      if (outputChannel) {
-        outputChannel.appendLine(
-          `[C# Razor Tag Helper Support] Found TagHelper (AST): ${className} -> <${elementName}> (${attributes.length} attributes) in ${uri.fsPath}`
-        );
-      }
-
-      walkSymbols(sym.children);
-    }
-  }
-
-  walkSymbols(symbols);
-  return result;
-}
-
-/**
- * Regex-based TagHelper extraction (fallback for when the language server has
- * not yet provided document symbols for a file).
- *
- * Known limitation: propRegex runs on the entire file text, so if multiple
- * TagHelper classes live in one file their properties can be mixed.  The AST
- * path above does not have this problem.
+ * Regex-based TagHelper extraction from C# source text.
  */
 function parseTagHelpersWithRegex(uri, text, globalEnumValues) {
   const lines = text.split(/\r?\n/);
@@ -514,9 +320,7 @@ function parseTagHelpersWithRegex(uri, text, globalEnumValues) {
 // ─── Main scanner ─────────────────────────────────────────────────────────────
 
 /**
- * Scan workspace C# files for classes ending with "TagHelper".
- * Primary path: DocumentSymbol tree from the C# language server (Roslyn AST).
- * Fallback: regex scanning (used per-file when the LS has not yet analysed it).
+ * Scan workspace C# files for TagHelper classes using regex only (no C# language server).
  */
 async function scanForTagHelpers() {
   if (!vscode.workspace.workspaceFolders) {
@@ -537,8 +341,7 @@ async function scanForTagHelpers() {
     allUris.push(...files);
   }
 
-  // Pass 1 – open every file, collect enums (needed before TagHelper extraction
-  // because a property type may reference an enum defined in a different file).
+  // Pass 1 – open every file once, collect enums and cache file content
   const globalEnumValues = Object.create(null);
   const fileDataList = [];
 
@@ -546,37 +349,17 @@ async function scanForTagHelpers() {
     try {
       const document = await vscode.workspace.openTextDocument(uri);
       const text = document.getText();
-
-      // Try AST-based enum collection first
-      let symbols = null;
-      try {
-        symbols = await vscode.commands.executeCommand(
-          'vscode.executeDocumentSymbolProvider',
-          uri
-        );
-      } catch { /* language server not ready yet */ }
-
-      if (symbols && symbols.length) {
-        collectEnumsFromSymbols(symbols, globalEnumValues);
-      } else {
-        collectEnumsFromText(text, globalEnumValues);
-      }
-
-      fileDataList.push({ uri, text, symbols });
+      collectEnumsFromText(text, globalEnumValues);
+      fileDataList.push({ uri, text });
     } catch {
       // ignore per-file errors
     }
   }
 
-  // Pass 2 – extract TagHelpers using globally resolved enum values
-  for (const { uri, text, symbols } of fileDataList) {
+  // Pass 2 – extract TagHelpers from cached content (regex only)
+  for (const { uri, text } of fileDataList) {
     try {
-      let entries;
-      if (symbols && symbols.length) {
-        entries = parseTagHelpersFromSymbols(uri, text, symbols, globalEnumValues);
-      } else {
-        entries = parseTagHelpersWithRegex(uri, text, globalEnumValues);
-      }
+      const entries = parseTagHelpersWithRegex(uri, text, globalEnumValues);
       result.push(...entries);
     } catch (err) {
       console.error('[csharp-custom-taghelpers] Failed to parse', uri.fsPath, err);
@@ -692,10 +475,14 @@ function registerCompletionProvider(context) {
     true
   );
 
-  const triggerCharacters = ['<', ' ', '='];
+  const triggerCharacters = ['<', ' ', '=', '-'];
   if (autoTriggerEnumValues) {
     triggerCharacters.push('"');
   }
+  // Trigger on letters and digits so attributes are suggested when typing on a new line (e.g. after Enter).
+  for (let c = 97; c <= 122; c++) triggerCharacters.push(String.fromCharCode(c));
+  for (let c = 65; c <= 90; c++) triggerCharacters.push(String.fromCharCode(c));
+  for (let c = 48; c <= 57; c++) triggerCharacters.push(String.fromCharCode(c));
 
   const provider = vscode.languages.registerCompletionItemProvider(
     selector,
@@ -770,6 +557,7 @@ function registerCompletionProvider(context) {
               vscode.CompletionItemKind.Class
             );
             elementItem.insertText = th.elementName;
+            elementItem.sortText = '\u0000' + th.elementName;
             elementItem.detail = `Tag Helper element (${th.className})`;
             if (th.summary) {
               elementItem.documentation = new vscode.MarkdownString(th.summary);
@@ -786,12 +574,14 @@ function registerCompletionProvider(context) {
           (th) => th.elementName === tagName
         );
         if (!activeHelpers.length) {
-          // Critical: do NOT fall back to all tag helpers here, otherwise
-          // attributes get mixed when we mis-detect the active tag.
           return [];
         }
 
-        // Check if we are inside an attribute value for a known attribute
+        // Optional: filter attributes by what the user has typed so far (e.g. "lay" → layout-template)
+        const wordRange = document.getWordRangeAtPosition(position, /[a-zA-Z0-9\-]+/);
+        const prefix = wordRange ? document.getText(wordRange).toLowerCase() : '';
+
+        // Inside an attribute value (e.g. row-number-p="|" or edit-mode="|") – only suggest valid values.
         const openTagText = textBeforeCursor.substring(lastLt);
         const valueAttrMatch = openTagText.match(
           /([a-zA-Z0-9\-\:]+)\s*=\s*["'][^"']*$/
@@ -808,23 +598,25 @@ function registerCompletionProvider(context) {
               continue;
             }
             for (const v of vals) {
-              if (seenValues.has(v)) {
-                continue;
-              }
+              if (seenValues.has(v)) continue;
               seenValues.add(v);
               const valItem = new vscode.CompletionItem(
                 v,
                 vscode.CompletionItemKind.EnumMember
               );
               valItem.insertText = v;
+              valItem.sortText = '\u0000' + v;
               valItem.detail = `Value for ${valueAttrName} (${th.className})`;
               valueItems.push(valItem);
             }
           }
 
+          // Only enum/bool have valueSuggestions: return just those, or nothing (no random strings / other attrs).
           if (valueItems.length) {
             return valueItems;
           }
+          // Attribute has no value suggestions (e.g. string) – return nothing so we don't suggest other attribute names here.
+          return [];
         }
 
         const seenAttrs = new Set();
@@ -833,6 +625,9 @@ function registerCompletionProvider(context) {
             continue;
           }
           for (const attrName of th.attributes) {
+            if (prefix && !attrName.toLowerCase().startsWith(prefix)) {
+              continue;
+            }
             if (seenAttrs.has(attrName)) {
               continue;
             }
@@ -842,10 +637,12 @@ function registerCompletionProvider(context) {
               attrName,
               vscode.CompletionItemKind.Property
             );
-            // Insert attribute with ="", cursor placed inside quotes
+            // Insert only attribute name and empty quotes (no type suffix like ": boolean")
             attrItem.insertText = new vscode.SnippetString(
               `${attrName}="$1"$0`
             );
+            // Sort before C# LS items (e.g. "row-number-p : boolean") so our attribute-only suggestion is first
+            attrItem.sortText = '\u0000' + attrName;
             attrItem.detail = `Tag Helper attribute (${th.className})`;
             const attrSummary =
               th.attributeSummaries && th.attributeSummaries[attrName];
@@ -885,18 +682,7 @@ function registerCompletionProvider(context) {
 async function activate(context) {
   outputChannel = vscode.window.createOutputChannel('C# Razor Tag Helper Support');
   outputChannel.appendLine('[C# Razor Tag Helper Support] Extension activated.');
-  // Initial scan (C# LS often not ready yet → regex fallback)
   refreshTagHelpers(false);
-
-  // Delayed rescan so C# Language Server can provide AST; then we get (AST) instead of (regex)
-  const AST_RESCAN_DELAY_MS = 4500;
-  const astRescanTimer = setTimeout(() => {
-    if (outputChannel) {
-      outputChannel.appendLine('[C# Razor Tag Helper Support] Rescanning with C# Language Server (AST)...');
-    }
-    refreshTagHelpers(false);
-  }, AST_RESCAN_DELAY_MS);
-  context.subscriptions.push({ dispose: () => clearTimeout(astRescanTimer) });
 
   // Command to refresh manually
   const refreshCommand = vscode.commands.registerCommand(
