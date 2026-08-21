@@ -47,7 +47,7 @@ jobs:
             gh release delete "$TAG" --yes
           fi
           gh release create "$TAG" \
-            --title "C# Razor Tag Helper Support ${VERSION}" \
+            --title "c# RTHS ${VERSION}" \
             --notes-file release-notes.md \
             --target "${GITHUB_SHA}" \
             "$VSIX"
