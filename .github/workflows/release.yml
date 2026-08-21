@@ -47,7 +47,7 @@ jobs:
             gh release delete "$TAG" --yes
           fi
           gh release create "$TAG" \
-            --title "c# RTHS ${VERSION}" \
+            --title "${VERSION}" \
             --notes-file release-notes.md \
             --target "${GITHUB_SHA}" \
             "$VSIX"
