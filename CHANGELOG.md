@@ -4,6 +4,14 @@ All notable changes to the **C# Razor Tag Helper Support** extension are documen
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-08-27
+
+### Added
+
+- **Tag Helper folding** in `.cshtml` / `.razor` files: fold markers for discovered Tag Helper elements, including multi-line opening tags (e.g. a `<grid>` with a large SQL `select` attribute) and nested open/close pairs.
+- Commands **Fold All Tag Helpers** and **Unfold All** (category *C# Razor Tag Helper Support*).
+- Setting `csharpRazorTagHelpers.enableFolding` (default `true`) to turn folding on or off.
+
 ## [1.1.6] - 2026-08-21
 
 ### Added

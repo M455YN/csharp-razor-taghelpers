@@ -39,6 +39,19 @@ provides improved editor assistance when working with them.
     code
 -   Shows helpful tooltips directly in Razor files
 
+### Tag Helper Folding
+
+-   Adds fold markers for discovered Tag Helper elements in `.cshtml` /
+    `.razor` files
+-   Collapses multi-line opening tags (typical for a `<grid>` whose
+    `select` attribute holds a large SQL string)
+-   Collapses matching open/close Tag Helper pairs, including nesting
+-   Ignores markup that appears inside C# verbatim strings, quoted
+    attributes, and comments
+-   Command **C# Razor Tag Helper Support: Fold All Tag Helpers** folds
+    every Tag Helper in the current file
+-   Can be turned off with `csharpRazorTagHelpers.enableFolding`
+
 ------------------------------------------------------------------------
 
 ## How It Works

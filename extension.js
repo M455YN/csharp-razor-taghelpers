@@ -1,4 +1,5 @@
 const vscode = require('vscode');
+const { computeTagHelperFoldingRanges } = require('./folding');
 
 
 /**
@@ -21,6 +22,7 @@ let currentTagHelpers = [];
 let isScanning = false;
 let outputChannel = null;
 let rescanTimeout = null;
+let foldingRangesChanged = null;
 
 function debounce(fn, ms) {
   return function () {
@@ -442,6 +444,10 @@ async function refreshTagHelpers(showNotification = false) {
       );
     }
 
+    if (foldingRangesChanged) {
+      foldingRangesChanged.fire();
+    }
+
     // Notification in the bottom right corner of VS Code after the scan is complete
     vscode.window.showInformationMessage(
       `C# Razor Tag Helpers: ${found.length} TagHelpers found.`
@@ -758,6 +764,110 @@ async function activate(context) {
   });
 
   context.subscriptions.push(hoverProvider);
+
+  registerFoldingRangeProvider(context);
+}
+
+function razorSelector() {
+  return [{ language: 'razor' }, { language: 'aspnetcorerazor' }];
+}
+
+function isRazorDocument(document) {
+  if (!document) return false;
+  return document.languageId === 'razor' || document.languageId === 'aspnetcorerazor';
+}
+
+function foldingEnabled(uri) {
+  return vscode.workspace
+    .getConfiguration('csharpRazorTagHelpers', uri)
+    .get('enableFolding', true);
+}
+
+/**
+ * Folding for discovered Tag Helper elements (including huge multi-line
+ * opening tags with SQL in attributes).
+ */
+function registerFoldingRangeProvider(context) {
+  foldingRangesChanged = new vscode.EventEmitter();
+  context.subscriptions.push(foldingRangesChanged);
+
+  const provider = vscode.languages.registerFoldingRangeProvider(razorSelector(), {
+    onDidChangeFoldingRanges: foldingRangesChanged.event,
+    provideFoldingRanges(document, _context, token) {
+      if (token.isCancellationRequested) {
+        return [];
+      }
+      if (!foldingEnabled(document.uri) || !currentTagHelpers.length) {
+        return [];
+      }
+      const ranges = computeTagHelperFoldingRanges(
+        document.getText(),
+        currentTagHelpers
+      );
+      return ranges.map((r) => new vscode.FoldingRange(r.start, r.end));
+    }
+  });
+  context.subscriptions.push(provider);
+
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('csharpRazorTagHelpers.enableFolding')) {
+        foldingRangesChanged.fire();
+      }
+    })
+  );
+
+  const foldAll = vscode.commands.registerCommand(
+    'csharpRazorTagHelpers.foldAll',
+    async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor || !isRazorDocument(editor.document)) {
+        vscode.window.showInformationMessage(
+          'C# Razor Tag Helpers: open a .cshtml or .razor file to fold Tag Helpers.'
+        );
+        return;
+      }
+      if (!foldingEnabled(editor.document.uri)) {
+        vscode.window.showInformationMessage(
+          'C# Razor Tag Helpers: folding is disabled in settings.'
+        );
+        return;
+      }
+      const ranges = computeTagHelperFoldingRanges(
+        editor.document.getText(),
+        currentTagHelpers
+      );
+      const selectionLines = [...new Set(ranges.map((r) => r.start))];
+      if (!selectionLines.length) {
+        vscode.window.showInformationMessage(
+          'C# Razor Tag Helpers: no foldable Tag Helpers in this file.'
+        );
+        return;
+      }
+      await vscode.commands.executeCommand('editor.fold', { selectionLines });
+    }
+  );
+
+  const unfoldAll = vscode.commands.registerCommand(
+    'csharpRazorTagHelpers.unfoldAll',
+    async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor || !isRazorDocument(editor.document)) {
+        return;
+      }
+      const ranges = computeTagHelperFoldingRanges(
+        editor.document.getText(),
+        currentTagHelpers
+      );
+      const selectionLines = [...new Set(ranges.map((r) => r.start))];
+      if (!selectionLines.length) {
+        return;
+      }
+      await vscode.commands.executeCommand('editor.unfold', { selectionLines });
+    }
+  );
+
+  context.subscriptions.push(foldAll, unfoldAll);
 }
 
 function deactivate() {

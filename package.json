@@ -2,7 +2,7 @@
   "name": "csharp-razor-taghelpers",
   "displayName": "C# Razor Tag Helper Support",
   "description": "Enhanced C# and .NET development in VS Code with IntelliSense and hover support for custom Razor Tag Helpers.",
-  "version": "1.1.6",
+  "version": "1.2.0",
   "publisher": "M455YN",
   "author": {
     "name": "Mateusz Afelt"
@@ -42,6 +42,16 @@
         "command": "csharpRazorTagHelpers.refresh",
         "title": "C# Razor Tag Helper Support: Refresh",
         "category": "C# Razor Tag Helper Support"
+      },
+      {
+        "command": "csharpRazorTagHelpers.foldAll",
+        "title": "Fold All Tag Helpers",
+        "category": "C# Razor Tag Helper Support"
+      },
+      {
+        "command": "csharpRazorTagHelpers.unfoldAll",
+        "title": "Unfold All Tag Helpers",
+        "category": "C# Razor Tag Helper Support"
       }
     ],
     "configuration": {
@@ -56,19 +66,26 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically trigger completion for enum-based attribute values when typing opening quotes (e.g. layout-type=\"...\")."
+        },
+        "csharpRazorTagHelpers.enableFolding": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable folding of Tag Helper elements in Razor files, including multi-line opening tags (e.g. a <grid> whose select attribute spans many lines of SQL)."
         }
       }
     }
   },
   "files": [
     "extension.js",
+    "folding.js",
     "logo.png",
     "README.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "LICENSE"
   ],
   "scripts": {
     "lint": "echo \"No lint configured\"",
-    "test": "echo \"No tests yet\""
+    "test": "node test/folding.test.js"
   },
   "license": "MIT",
   "bugs": {
