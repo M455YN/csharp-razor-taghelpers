@@ -6,9 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08-28
+
 ### Added
 
 - Release workflow publishes the packaged VSIX to the Visual Studio Marketplace (`HaaLeo/publish-vscode-extension`).
+- **Go to Definition (F12)** from a Tag Helper element or attribute name in Razor to the C# class or property.
+- **SQL highlighting** in Tag Helper attribute values. Rules are configurable (`csharpRazorTagHelpers.sqlHighlighting.rules`): `tag` can be a helper name or `*` (any element), `attributes` is a list of names or `*`.
+- **Outline** of Tag Helpers in a Razor file (`grid#id`, nested `filter[parameter-name]`).
+- **Copy Attribute Value** command and context-menu item.
+- **Diagnostics:** unknown Tag Helper attributes and `ParentTag` mismatches (debounced; does not rescan C#).
+- **What's New** after install or update: opens this changelog (the same `CHANGELOG.md` as on GitHub) in an editor tab. Reopen with command **What's New**; disable auto-open with `csharpRazorTagHelpers.showWhatsNewOnUpdate`.
 
 ## [1.2.2] - 2026-08-28
 
@@ -144,7 +152,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Command **C# Razor Tag Helpers: Refresh** to rescan Tag Helpers manually.
 - Output channel **C# Razor Tag Helper Support** for scan progress and results.
 
-[Unreleased]: https://github.com/M455YN/csharp-razor-taghelpers/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/M455YN/csharp-razor-taghelpers/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/M455YN/csharp-razor-taghelpers/compare/v1.2.2...v1.3.0
 [1.1.1]: https://github.com/M455YN/csharp-razor-taghelpers/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/M455YN/csharp-razor-taghelpers/compare/v1.0.5...v1.1.0
 [1.0.5]: https://github.com/M455YN/csharp-razor-taghelpers/compare/v1.0.2...v1.0.5

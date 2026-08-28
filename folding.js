@@ -527,6 +527,64 @@ function scanOpeningTags(text) {
   return tags;
 }
 
+function collectTagEvents(text) {
+  const events = [];
+  if (!text) return events;
+
+  let i = 0;
+  const len = text.length;
+  while (i < len) {
+    const skipped = skipTopLevelTrivia(text, i);
+    if (skipped !== i) {
+      i = skipped;
+      continue;
+    }
+    if (text[i] !== '<') {
+      i += 1;
+      continue;
+    }
+
+    const peeked = peekTagName(text, i);
+    if (!peeked) {
+      i += 1;
+      continue;
+    }
+
+    const tag = parseTag(text, i);
+    if (!tag) {
+      i += 1;
+      continue;
+    }
+
+    i = tag.endIndex;
+    const nameStart = tag.nameEnd - tag.name.length;
+    if (tag.closing) {
+      events.push({
+        type: 'close',
+        name: tag.name,
+        startIndex: tag.startIndex,
+        endIndex: tag.endIndex,
+        nameStart,
+        nameEnd: tag.nameEnd
+      });
+      continue;
+    }
+
+    events.push({
+      type: 'open',
+      name: tag.name,
+      startIndex: tag.startIndex,
+      endIndex: tag.endIndex,
+      nameStart,
+      nameEnd: tag.nameEnd,
+      selfClosing: tag.selfClosing,
+      attributes: collectAttributes(text, peeked.nameEnd, tag.endIndex)
+    });
+  }
+
+  return events;
+}
+
 function longestValuedAttribute(attributes) {
   let best = null;
   let bestLen = -1;
@@ -568,6 +626,74 @@ function findAttributeContext(text, offset) {
         tag.attributes.find((a) => a.name.toLowerCase() === 'select') || null,
       longest: longestValuedAttribute(tag.attributes)
     };
+  }
+  return null;
+}
+
+/**
+ * What F12 should jump from: the Tag Helper element name or an attribute name.
+ * Ignores cursors inside attribute values (e.g. SQL).
+ */
+function findDefinitionTarget(text, offset) {
+  if (!text || offset == null || offset < 0) return null;
+
+  let i = 0;
+  const len = text.length;
+  while (i < len) {
+    const skipped = skipTopLevelTrivia(text, i);
+    if (skipped !== i) {
+      i = skipped;
+      continue;
+    }
+    if (text[i] !== '<') {
+      i += 1;
+      continue;
+    }
+
+    const peeked = peekTagName(text, i);
+    if (!peeked) {
+      i += 1;
+      continue;
+    }
+
+    const tag = parseTag(text, i);
+    if (!tag) {
+      i += 1;
+      continue;
+    }
+
+    i = tag.endIndex;
+    if (offset < tag.startIndex || offset >= tag.endIndex) {
+      continue;
+    }
+
+    const nameStart = tag.nameEnd - tag.name.length;
+    if (offset >= nameStart && offset < tag.nameEnd) {
+      return {
+        type: 'element',
+        name: tag.name,
+        originStart: nameStart,
+        originEnd: tag.nameEnd
+      };
+    }
+
+    if (tag.closing) {
+      return null;
+    }
+
+    const attributes = collectAttributes(text, peeked.nameEnd, tag.endIndex);
+    for (const attr of attributes) {
+      if (offset >= attr.nameStart && offset < attr.nameEnd) {
+        return {
+          type: 'attribute',
+          tagName: tag.name,
+          name: attr.name,
+          originStart: attr.nameStart,
+          originEnd: attr.nameEnd
+        };
+      }
+    }
+    return null;
   }
   return null;
 }
@@ -690,6 +816,8 @@ module.exports = {
   computeTagHelperFoldingRanges,
   findAttributeContext,
   resolveSelectableAttribute,
+  findDefinitionTarget,
   unwrapAttributeContent,
-  scanOpeningTags
+  scanOpeningTags,
+  collectTagEvents
 };

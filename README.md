@@ -67,6 +67,55 @@ provides improved editor assistance when working with them.
 -   **Expand Selection** (`Shift+Alt+Right` / `Alt+Shift+Right`) grows
     from the SQL, to the whole attribute, to the whole Tag Helper
 
+### Go to Definition (F12)
+
+-   `F12` on a Tag Helper element name (`<grid>`, `</filters>`) jumps to
+    the C# Tag Helper class
+-   `F12` on an attribute name jumps to the corresponding C# property
+    (including properties inherited from a base Tag Helper)
+
+### SQL highlighting
+
+-   Highlights SQL keywords, comments, strings, and numbers inside
+    configured Tag Helper attributes (default: `select`, `insert`,
+    `update`, `delete`, `move`, `lookup-sql`, `sql` on **any** tag)
+-   Restrict or extend via `csharpRazorTagHelpers.sqlHighlighting.rules`,
+    for example only `<grid>` and `<filter>`:
+
+        "csharpRazorTagHelpers.sqlHighlighting.rules": [
+          { "tag": "grid", "attributes": ["select", "insert", "update", "delete"] },
+          { "tag": "filter", "attributes": ["lookup-sql"] }
+        ]
+
+-   `tag` can be a helper name or `*` (any element). `attributes` can
+    include `*` (every attribute of that tag)
+-   Turn off with `csharpRazorTagHelpers.sqlHighlighting.enabled`
+
+### Outline
+
+-   Tag Helpers appear in **Outline** / breadcrumbs as nested symbols
+    (`grid#grid-talent-matrix`, `filter[programId]`)
+
+### Copy Attribute Value
+
+-   Command **Copy Attribute Value** (also in the editor context menu)
+    copies the inner value (e.g. SQL in `select`) to the clipboard
+
+### Diagnostics
+
+-   Warns about unknown attributes on a known Tag Helper (typos like
+    `hide-item-buton-p`); HTML, `data-*`, `aria-*`, and `asp-*` are ignored
+-   Warns when a helper is used outside its `ParentTag` (e.g. `<filter>`
+    outside `<filters-group>`)
+-   Toggle with `csharpRazorTagHelpers.diagnostics.enabled`
+
+### What's New
+
+-   After a fresh install or an update, a **What's New** tab opens with
+    the same `CHANGELOG.md` as on GitHub (markdown, not a webview)
+-   Reopen anytime: **C# Razor Tag Helper Support: What's New**
+-   Turn off auto-open with `csharpRazorTagHelpers.showWhatsNewOnUpdate`
+
 ------------------------------------------------------------------------
 
 ## How It Works

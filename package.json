@@ -2,7 +2,7 @@
   "name": "csharp-razor-taghelpers",
   "displayName": "C# Razor Tag Helper Support",
   "description": "Enhanced C# and .NET development in VS Code with IntelliSense and hover support for custom Razor Tag Helpers.",
-  "version": "1.2.2",
+  "version": "1.3.0",
   "publisher": "M455YN",
   "author": {
     "name": "Mateusz Afelt"
@@ -57,6 +57,16 @@
         "command": "csharpRazorTagHelpers.selectAttributeValue",
         "title": "Select Attribute Value",
         "category": "C# Razor Tag Helper Support"
+      },
+      {
+        "command": "csharpRazorTagHelpers.copyAttributeValue",
+        "title": "Copy Attribute Value",
+        "category": "C# Razor Tag Helper Support"
+      },
+      {
+        "command": "csharpRazorTagHelpers.showWhatsNew",
+        "title": "What's New",
+        "category": "C# Razor Tag Helper Support"
       }
     ],
     "menus": {
@@ -67,14 +77,19 @@
           "group": "csharpRazorTagHelpers@1"
         },
         {
-          "command": "csharpRazorTagHelpers.foldAll",
+          "command": "csharpRazorTagHelpers.copyAttributeValue",
           "when": "editorTextFocus && (editorLangId == razor || editorLangId == aspnetcorerazor || resourceExtname == .cshtml || resourceExtname == .razor)",
           "group": "csharpRazorTagHelpers@2"
         },
         {
-          "command": "csharpRazorTagHelpers.unfoldAll",
+          "command": "csharpRazorTagHelpers.foldAll",
           "when": "editorTextFocus && (editorLangId == razor || editorLangId == aspnetcorerazor || resourceExtname == .cshtml || resourceExtname == .razor)",
           "group": "csharpRazorTagHelpers@3"
+        },
+        {
+          "command": "csharpRazorTagHelpers.unfoldAll",
+          "when": "editorTextFocus && (editorLangId == razor || editorLangId == aspnetcorerazor || resourceExtname == .cshtml || resourceExtname == .razor)",
+          "group": "csharpRazorTagHelpers@4"
         }
       ]
     },
@@ -91,17 +106,119 @@
           "default": true,
           "description": "Automatically trigger completion for enum-based attribute values when typing opening quotes (e.g. layout-type=\"...\")."
         },
+        "csharpRazorTagHelpers.showWhatsNewOnUpdate": {
+          "type": "boolean",
+          "default": true,
+          "description": "Open What's New (the GitHub changelog) after installing or updating the extension."
+        },
         "csharpRazorTagHelpers.enableFolding": {
           "type": "boolean",
           "default": true,
           "description": "Enable folding of Tag Helper elements in Razor files, including multi-line opening tags (e.g. a <grid> whose select attribute spans many lines of SQL)."
+        },
+        "csharpRazorTagHelpers.diagnostics.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show Tag Helper warnings in Razor files (unknown attributes, ParentTag)."
+        },
+        "csharpRazorTagHelpers.diagnostics.unknownAttributes": {
+          "type": "boolean",
+          "default": true,
+          "description": "Warn about attributes that are not properties of the current Tag Helper (HTML/aria/data/asp-* attributes are ignored)."
+        },
+        "csharpRazorTagHelpers.diagnostics.parentTag": {
+          "type": "boolean",
+          "default": true,
+          "description": "Warn when a Tag Helper is used outside its HtmlTargetElement ParentTag (e.g. <filter> outside <filters-group>)."
+        },
+        "csharpRazorTagHelpers.sqlHighlighting.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Highlight SQL inside configured Tag Helper attribute values."
+        },
+        "csharpRazorTagHelpers.sqlHighlighting.rules": {
+          "type": "array",
+          "description": "Which Tag Helper elements and attributes get SQL highlighting. tag can be a helper name (e.g. grid) or * for any element. attributes is a list of kebab-case names, or * for every attribute of that tag.",
+          "default": [
+            {
+              "tag": "*",
+              "attributes": [
+                "select",
+                "insert",
+                "update",
+                "delete",
+                "move",
+                "lookup-sql",
+                "sql"
+              ]
+            }
+          ],
+          "items": {
+            "type": "object",
+            "required": ["attributes"],
+            "properties": {
+              "tag": {
+                "type": "string",
+                "default": "*",
+                "description": "Tag Helper element name, or * for any."
+              },
+              "attributes": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Attribute names (kebab-case). Use * for all attributes of that tag."
+              }
+            }
+          }
         }
       }
-    }
+    },
+    "colors": [
+      {
+        "id": "csharpRazorTagHelpers.sql.keyword",
+        "description": "SQL keyword inside Tag Helper attributes",
+        "defaults": {
+          "dark": "#569CD6",
+          "light": "#0000FF",
+          "highContrast": "#569CD6"
+        }
+      },
+      {
+        "id": "csharpRazorTagHelpers.sql.comment",
+        "description": "SQL comment inside Tag Helper attributes",
+        "defaults": {
+          "dark": "#6A9955",
+          "light": "#008000",
+          "highContrast": "#6A9955"
+        }
+      },
+      {
+        "id": "csharpRazorTagHelpers.sql.string",
+        "description": "SQL string inside Tag Helper attributes",
+        "defaults": {
+          "dark": "#CE9178",
+          "light": "#A31515",
+          "highContrast": "#CE9178"
+        }
+      },
+      {
+        "id": "csharpRazorTagHelpers.sql.number",
+        "description": "SQL number inside Tag Helper attributes",
+        "defaults": {
+          "dark": "#B5CEA8",
+          "light": "#098658",
+          "highContrast": "#B5CEA8"
+        }
+      }
+    ]
   },
   "files": [
     "extension.js",
     "folding.js",
+    "definition.js",
+    "sqlHighlight.js",
+    "outline.js",
+    "diagnostics.js",
+    "whatsNew.js",
     "logo.png",
     "README.md",
     "CHANGELOG.md",
@@ -109,7 +226,7 @@
   ],
   "scripts": {
     "lint": "echo \"No lint configured\"",
-    "test": "node test/folding.test.js"
+    "test": "node test/folding.test.js && node test/definition.test.js && node test/sql.test.js && node test/outline-diagnostics.test.js && node test/whatsNew.test.js"
   },
   "license": "MIT",
   "bugs": {

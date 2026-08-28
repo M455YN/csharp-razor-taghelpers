@@ -1,5 +1,10 @@
 const vscode = require('vscode');
-const { computeTagHelperFoldingRanges, findAttributeContext, resolveSelectableAttribute } = require('./folding');
+const { computeTagHelperFoldingRanges, findAttributeContext, resolveSelectableAttribute, findDefinitionTarget } = require('./folding');
+const { matchingTagHelpers, findSymbolInCSharpText } = require('./definition');
+const { collectSqlRanges, DEFAULT_SQL_RULES } = require('./sqlHighlight');
+const { collectOutline } = require('./outline');
+const { collectDiagnostics } = require('./diagnostics');
+const { registerWhatsNew } = require('./whatsNew');
 
 
 /**
@@ -23,6 +28,7 @@ let isScanning = false;
 let outputChannel = null;
 let rescanTimeout = null;
 let foldingRangesChanged = null;
+let diagnosticsRefresh = null;
 
 function debounce(fn, ms) {
   return function () {
@@ -233,17 +239,26 @@ function parseTagHelpersWithRegex(uri, text, globalEnumValues) {
 
   // Pass 2 – map [HtmlTargetElement("...")] to the class below it
   const classElementNames = {};
+  const classParentTags = {};
   let pendingElementName = null;
+  let pendingParentTag = null;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const attrMatch = line.match(/\[\s*HtmlTargetElement\s*\(\s*"(.*?)"/);
-    if (attrMatch) { pendingElementName = attrMatch[1]; continue; }
+    const attrMatch = line.match(/\[\s*HtmlTargetElement\s*\(\s*"(.*?)"([^\]\n]*)/);
+    if (attrMatch) {
+      pendingElementName = attrMatch[1];
+      const parent = attrMatch[2] && attrMatch[2].match(/ParentTag\s*=\s*"(.*?)"/);
+      pendingParentTag = parent ? parent[1] : null;
+      continue;
+    }
     const classDeclMatch = line.match(/class\s+(\w+)\b/);
     if (classDeclMatch) {
       const cName = classDeclMatch[1];
       if (pendingElementName) {
         classElementNames[cName] = pendingElementName;
+        classParentTags[cName] = pendingParentTag;
         pendingElementName = null;
+        pendingParentTag = null;
       }
     }
   }
@@ -304,6 +319,7 @@ function parseTagHelpersWithRegex(uri, text, globalEnumValues) {
       attributeName: elementName,
       file: uri.fsPath,
       attributes,
+      parentTag: classParentTags[className] || null,
       summary: classSummaries[className],
       attributeSummaries,
       valueSuggestions
@@ -446,6 +462,9 @@ async function refreshTagHelpers(showNotification = false) {
 
     if (foldingRangesChanged) {
       foldingRangesChanged.fire();
+    }
+    if (typeof diagnosticsRefresh === 'function') {
+      diagnosticsRefresh();
     }
 
     // Notification in the bottom right corner of VS Code after the scan is complete
@@ -767,6 +786,11 @@ async function activate(context) {
 
   registerFoldingRangeProvider(context);
   registerAttributeSelection(context);
+  registerGoToDefinition(context);
+  registerSqlHighlighting(context);
+  registerOutline(context);
+  registerDiagnostics(context);
+  registerWhatsNew(context);
 }
 
 function razorSelector() {
@@ -986,7 +1010,335 @@ function registerAttributeSelection(context) {
     }
   );
 
-  context.subscriptions.push(selectionProvider, selectAttr);
+  const copyAttr = vscode.commands.registerCommand(
+    'csharpRazorTagHelpers.copyAttributeValue',
+    async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor || !isRazorDocument(editor.document)) {
+        vscode.window.showInformationMessage(
+          'C# Razor Tag Helpers: open a .cshtml or .razor file to copy an attribute value.'
+        );
+        return;
+      }
+
+      const offset = editor.document.offsetAt(editor.selection.active);
+      const ctx = findAttributeContext(editor.document.getText(), offset);
+      const attr = resolveSelectableAttribute(ctx);
+      if (!attr || attr.contentStart == null || attr.contentEnd <= attr.contentStart) {
+        vscode.window.showInformationMessage(
+          'C# Razor Tag Helpers: place the cursor inside a Tag Helper (or its select attribute).'
+        );
+        return;
+      }
+
+      const value = editor.document.getText(
+        new vscode.Range(
+          editor.document.positionAt(attr.contentStart),
+          editor.document.positionAt(attr.contentEnd)
+        )
+      );
+      await vscode.env.clipboard.writeText(value);
+      vscode.window.setStatusBarMessage(
+        'C# Razor Tag Helpers: copied ' + attr.name + ' value',
+        2500
+      );
+    }
+  );
+
+  context.subscriptions.push(selectionProvider, selectAttr, copyAttr);
+}
+
+function registerGoToDefinition(context) {
+  const provider = vscode.languages.registerDefinitionProvider(razorSelector(), {
+    async provideDefinition(document, position) {
+      if (!currentTagHelpers.length) {
+        return [];
+      }
+      const text = document.getText();
+      const offset = document.offsetAt(position);
+      const target = findDefinitionTarget(text, offset);
+      if (!target) {
+        return [];
+      }
+
+      const elementName = target.type === 'element' ? target.name : target.tagName;
+      const helpers = matchingTagHelpers(currentTagHelpers, elementName);
+      if (!helpers.length) {
+        return [];
+      }
+
+      const locations = [];
+      const seen = new Set();
+
+      const addFromHelper = async (th, kebab) => {
+        if (!th || !th.file) return;
+        const key = th.file + '|' + th.className + '|' + (kebab || '');
+        if (seen.has(key)) return;
+        seen.add(key);
+        try {
+          const csDoc = await vscode.workspace.openTextDocument(th.file);
+          const found = findSymbolInCSharpText(
+            csDoc.getText(),
+            th.className,
+            kebab || null
+          );
+          if (!found || found.missingProperty) {
+            return found && found.missingProperty ? found : null;
+          }
+          const start = csDoc.positionAt(found.offset);
+          const end = csDoc.positionAt(found.offset + found.length);
+          locations.push(new vscode.Location(csDoc.uri, new vscode.Range(start, end)));
+          return found;
+        } catch {
+          return null;
+        }
+      };
+
+      if (target.type === 'element') {
+        for (const th of helpers) {
+          await addFromHelper(th, null);
+        }
+      } else {
+        for (const th of helpers) {
+          const found = await addFromHelper(th, target.name);
+          if (found && found.missingProperty && th.baseClassName) {
+            const base = currentTagHelpers.find(
+              (h) => h.className === th.baseClassName
+            );
+            const baseFound = await addFromHelper(base, target.name);
+            if (!baseFound || baseFound.missingProperty) {
+              const csDoc = await vscode.workspace.openTextDocument(th.file);
+              const start = csDoc.positionAt(found.offset);
+              const end = csDoc.positionAt(found.offset + found.length);
+              locations.push(
+                new vscode.Location(csDoc.uri, new vscode.Range(start, end))
+              );
+            }
+          } else if (found && found.missingProperty) {
+            const csDoc = await vscode.workspace.openTextDocument(th.file);
+            const start = csDoc.positionAt(found.offset);
+            const end = csDoc.positionAt(found.offset + found.length);
+            locations.push(
+              new vscode.Location(csDoc.uri, new vscode.Range(start, end))
+            );
+          }
+        }
+      }
+
+      return locations;
+    }
+  });
+  context.subscriptions.push(provider);
+}
+
+function registerSqlHighlighting(context) {
+  const decorationTypes = {
+    keyword: vscode.window.createTextEditorDecorationType({
+      color: new vscode.ThemeColor('csharpRazorTagHelpers.sql.keyword')
+    }),
+    comment: vscode.window.createTextEditorDecorationType({
+      color: new vscode.ThemeColor('csharpRazorTagHelpers.sql.comment'),
+      fontStyle: 'italic'
+    }),
+    string: vscode.window.createTextEditorDecorationType({
+      color: new vscode.ThemeColor('csharpRazorTagHelpers.sql.string')
+    }),
+    number: vscode.window.createTextEditorDecorationType({
+      color: new vscode.ThemeColor('csharpRazorTagHelpers.sql.number')
+    })
+  };
+  context.subscriptions.push(...Object.values(decorationTypes));
+
+  const empty = [];
+  let timer = null;
+
+  function clearEditor(editor) {
+    for (const type of Object.values(decorationTypes)) {
+      editor.setDecorations(type, empty);
+    }
+  }
+
+  function applyEditor(editor) {
+    if (!editor || !isRazorDocument(editor.document)) {
+      return;
+    }
+    const cfg = vscode.workspace.getConfiguration(
+      'csharpRazorTagHelpers',
+      editor.document.uri
+    );
+    if (!cfg.get('sqlHighlighting.enabled', true)) {
+      clearEditor(editor);
+      return;
+    }
+    const rules = cfg.get('sqlHighlighting.rules', DEFAULT_SQL_RULES);
+    const text = editor.document.getText();
+    const grouped = { keyword: [], comment: [], string: [], number: [] };
+    for (const block of collectSqlRanges(text, rules)) {
+      for (const token of block.tokens) {
+        grouped[token.type].push(
+          new vscode.Range(
+            editor.document.positionAt(token.start),
+            editor.document.positionAt(token.end)
+          )
+        );
+      }
+    }
+    for (const [type, ranges] of Object.entries(grouped)) {
+      editor.setDecorations(decorationTypes[type], ranges);
+    }
+  }
+
+  function refresh() {
+    for (const editor of vscode.window.visibleTextEditors) {
+      if (isRazorDocument(editor.document)) {
+        applyEditor(editor);
+      }
+    }
+  }
+
+  function schedule() {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(refresh, 200);
+  }
+
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeTextDocument((e) => {
+      if (isRazorDocument(e.document)) schedule();
+    }),
+    vscode.window.onDidChangeVisibleTextEditors(() => schedule()),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('csharpRazorTagHelpers.sqlHighlighting')) {
+        schedule();
+      }
+    })
+  );
+
+  schedule();
+}
+
+function registerOutline(context) {
+  const provider = vscode.languages.registerDocumentSymbolProvider(razorSelector(), {
+    provideDocumentSymbols(document) {
+      if (!currentTagHelpers.length) {
+        return [];
+      }
+      const roots = collectOutline(document.getText(), currentTagHelpers);
+      const toSymbol = (node) => {
+        const range = new vscode.Range(
+          document.positionAt(node.start),
+          document.positionAt(node.end)
+        );
+        const selectionRange = new vscode.Range(
+          document.positionAt(node.nameStart),
+          document.positionAt(node.nameEnd)
+        );
+        const symbol = new vscode.DocumentSymbol(
+          node.name,
+          node.tagName,
+          vscode.SymbolKind.Object,
+          range,
+          selectionRange
+        );
+        symbol.children = (node.children || []).map(toSymbol);
+        return symbol;
+      };
+      return roots.map(toSymbol);
+    }
+  });
+  context.subscriptions.push(provider);
+}
+
+function registerDiagnostics(context) {
+  const collection = vscode.languages.createDiagnosticCollection(
+    'csharpRazorTagHelpers'
+  );
+  context.subscriptions.push(collection);
+
+  function applyDocument(document) {
+    if (!isRazorDocument(document)) {
+      return;
+    }
+    const cfg = vscode.workspace.getConfiguration(
+      'csharpRazorTagHelpers',
+      document.uri
+    );
+    if (!cfg.get('diagnostics.enabled', true) || !currentTagHelpers.length) {
+      collection.delete(document.uri);
+      return;
+    }
+    const items = collectDiagnostics(document.getText(), currentTagHelpers, {
+      unknownAttributes: cfg.get('diagnostics.unknownAttributes', true),
+      parentTag: cfg.get('diagnostics.parentTag', true)
+    });
+    collection.set(
+      document.uri,
+      items.map((d) => {
+        const diagnostic = new vscode.Diagnostic(
+          new vscode.Range(
+            document.positionAt(d.start),
+            document.positionAt(d.end)
+          ),
+          d.message,
+          vscode.DiagnosticSeverity.Warning
+        );
+        diagnostic.source = 'C# Razor Tag Helpers';
+        diagnostic.code = d.code;
+        return diagnostic;
+      })
+    );
+  }
+
+  const timers = new Map();
+
+  function scheduleDocument(document) {
+    const key = document.uri.toString();
+    if (timers.has(key)) {
+      clearTimeout(timers.get(key));
+    }
+    timers.set(
+      key,
+      setTimeout(() => {
+        timers.delete(key);
+        applyDocument(document);
+      }, 250)
+    );
+  }
+
+  function refresh() {
+    for (const t of timers.values()) {
+      clearTimeout(t);
+    }
+    timers.clear();
+    for (const document of vscode.workspace.textDocuments) {
+      applyDocument(document);
+    }
+  }
+
+  diagnosticsRefresh = refresh;
+
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeTextDocument((e) => {
+      if (isRazorDocument(e.document)) scheduleDocument(e.document);
+    }),
+    vscode.workspace.onDidOpenTextDocument((document) => {
+      if (isRazorDocument(document)) scheduleDocument(document);
+    }),
+    vscode.workspace.onDidCloseTextDocument((document) => {
+      const key = document.uri.toString();
+      if (timers.has(key)) {
+        clearTimeout(timers.get(key));
+        timers.delete(key);
+      }
+      collection.delete(document.uri);
+    }),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('csharpRazorTagHelpers.diagnostics')) {
+        refresh();
+      }
+    })
+  );
+
+  refresh();
 }
 
 function deactivate() {
