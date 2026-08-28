@@ -4,6 +4,13 @@ All notable changes to the **C# Razor Tag Helper Support** extension are documen
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Select Attribute Value:** command, editor context menu (right-click), and Expand Selection (`Shift+Alt+Right`) to select only the inner value of a Tag Helper attribute (e.g. the SQL inside `select="@(@" ... ")"`), not the whole tag. Cursor on the tag name falls back to the `select` attribute.
+- Separate fold markers for multi-line Tag Helper attributes so a large `select` / `lookup-sql` can be collapsed independently of the rest of the tag.
+
 ## [1.2.1] - 2026-08-28
 
 ### Fixed

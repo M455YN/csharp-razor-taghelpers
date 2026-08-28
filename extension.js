@@ -1,5 +1,5 @@
 const vscode = require('vscode');
-const { computeTagHelperFoldingRanges } = require('./folding');
+const { computeTagHelperFoldingRanges, findAttributeContext, resolveSelectableAttribute } = require('./folding');
 
 
 /**
@@ -766,6 +766,7 @@ async function activate(context) {
   context.subscriptions.push(hoverProvider);
 
   registerFoldingRangeProvider(context);
+  registerAttributeSelection(context);
 }
 
 function razorSelector() {
@@ -868,6 +869,124 @@ function registerFoldingRangeProvider(context) {
   );
 
   context.subscriptions.push(foldAll, unfoldAll);
+}
+
+function offsetsToRange(document, start, end) {
+  if (start == null || end == null || end < start) {
+    return undefined;
+  }
+  return new vscode.Range(document.positionAt(start), document.positionAt(end));
+}
+
+function rangeContainsPosition(range, position) {
+  return range && range.contains(position);
+}
+
+function chainSelectionRanges(ranges) {
+  const unique = [];
+  for (const range of ranges) {
+    if (!range || range.isEmpty) continue;
+    const prev = unique[unique.length - 1];
+    if (prev && prev.isEqual(range)) continue;
+    unique.push(range);
+  }
+  if (!unique.length) {
+    return undefined;
+  }
+  let current = new vscode.SelectionRange(unique[unique.length - 1]);
+  for (let i = unique.length - 2; i >= 0; i--) {
+    current = new vscode.SelectionRange(unique[i], current);
+  }
+  return current;
+}
+
+/**
+ * Expand Selection (Shift+Alt+Right) grows from the SQL inside `select`
+ * to the whole attribute, then the whole Tag Helper.
+ */
+function registerAttributeSelection(context) {
+  const selectionProvider = vscode.languages.registerSelectionRangeProvider(
+    razorSelector(),
+    {
+      provideSelectionRanges(document, positions) {
+        const text = document.getText();
+        return positions.map((position) => {
+          const offset = document.offsetAt(position);
+          const ctx = findAttributeContext(text, offset);
+          if (!ctx) {
+            return undefined;
+          }
+
+          const nested = [];
+          const attr = ctx.attribute;
+          if (attr && attr.contentStart != null && attr.contentEnd > attr.contentStart) {
+            const content = offsetsToRange(
+              document,
+              attr.contentStart,
+              attr.contentEnd
+            );
+            if (rangeContainsPosition(content, position)) {
+              nested.push(content);
+            }
+          }
+          if (attr && attr.valueStart != null) {
+            const value = offsetsToRange(document, attr.valueStart, attr.valueEnd);
+            if (rangeContainsPosition(value, position)) {
+              nested.push(value);
+            }
+            const wholeAttr = offsetsToRange(
+              document,
+              attr.nameStart,
+              attr.valueEnd != null ? attr.valueEnd : attr.nameEnd
+            );
+            if (rangeContainsPosition(wholeAttr, position)) {
+              nested.push(wholeAttr);
+            }
+          }
+          const tagRange = offsetsToRange(
+            document,
+            ctx.tag.startIndex,
+            ctx.tag.endIndex
+          );
+          if (rangeContainsPosition(tagRange, position)) {
+            nested.push(tagRange);
+          }
+
+          return chainSelectionRanges(nested);
+        });
+      }
+    }
+  );
+
+  const selectAttr = vscode.commands.registerCommand(
+    'csharpRazorTagHelpers.selectAttributeValue',
+    async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor || !isRazorDocument(editor.document)) {
+        vscode.window.showInformationMessage(
+          'C# Razor Tag Helpers: open a .cshtml or .razor file to select an attribute value.'
+        );
+        return;
+      }
+
+      const offset = editor.document.offsetAt(editor.selection.active);
+      const ctx = findAttributeContext(editor.document.getText(), offset);
+      const attr = resolveSelectableAttribute(ctx);
+      if (!attr || attr.contentStart == null || attr.contentEnd <= attr.contentStart) {
+        vscode.window.showInformationMessage(
+          'C# Razor Tag Helpers: place the cursor inside a Tag Helper (or its select attribute).'
+        );
+        return;
+      }
+
+      const start = editor.document.positionAt(attr.contentStart);
+      const end = editor.document.positionAt(attr.contentEnd);
+      editor.selection = new vscode.Selection(start, end);
+      editor.revealRange(new vscode.Range(start, end), vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+    }
+  );
+
+  context.subscriptions.push(selectionProvider, selectAttr);
 }
 
 function deactivate() {

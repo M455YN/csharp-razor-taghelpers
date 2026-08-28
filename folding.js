@@ -57,6 +57,10 @@ function isNameChar(ch) {
   );
 }
 
+function isWs(ch) {
+  return ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r';
+}
+
 function isNameStart(ch) {
   return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
 }
@@ -301,6 +305,7 @@ function parseTag(text, ltIndex) {
         startIndex: ltIndex,
         endIndex: i + 1,
         name: peeked.name,
+        nameEnd: peeked.nameEnd,
         closing: peeked.closing,
         selfClosing
       };
@@ -315,6 +320,273 @@ function pushRange(ranges, start, end) {
   if (end > start) {
     ranges.push({ start, end });
   }
+}
+
+function unwrapRazorStringBody(text, start, end) {
+  if (start == null || end == null || end <= start) {
+    return { start, end };
+  }
+
+  let i = start;
+  while (i < end && isWs(text[i])) i += 1;
+  if (i >= end) {
+    return { start, end };
+  }
+
+  if (text[i] === '@' && text[i + 1] === '(') {
+    const close = skipBalanced(text, i + 1, '(', ')');
+    const innerEnd = Math.min(close - 1, end);
+    return unwrapRazorStringBody(text, i + 2, innerEnd);
+  }
+
+  const verbLen = verbatimOpenLength(text, i);
+  if (verbLen) {
+    const contentStart = i + verbLen;
+    const after = skipVerbatim(text, contentStart);
+    return { start: contentStart, end: Math.min(after - 1, end) };
+  }
+
+  if (text[i] === '"' || text[i] === "'") {
+    const after = skipQuoted(text, i);
+    return { start: i + 1, end: Math.min(after - 1, end) };
+  }
+
+  let best = null;
+  for (let k = i; k < end; k++) {
+    const verb = verbatimOpenLength(text, k);
+    if (verb) {
+      const contentStart = k + verb;
+      const after = skipVerbatim(text, contentStart);
+      const contentEnd = Math.min(after - 1, end);
+      const len = contentEnd - contentStart;
+      if (!best || len > best.len) {
+        best = { start: contentStart, end: contentEnd, len };
+      }
+      k = after - 1;
+      continue;
+    }
+    const skipped = skipStringOrComment(text, k);
+    if (skipped !== k) {
+      k = skipped - 1;
+    }
+  }
+
+  if (best && best.len > 0) {
+    return { start: best.start, end: best.end };
+  }
+
+  return { start: i, end };
+}
+
+function unwrapAttributeContent(text, valueStart, valueEnd) {
+  if (valueStart == null || valueEnd == null || valueEnd <= valueStart) {
+    return { start: valueStart, end: valueEnd };
+  }
+
+  let start = valueStart;
+  let end = valueEnd;
+  const q = text[start];
+  if (q === '"' || q === "'") {
+    start += 1;
+    if (end > start && text[end - 1] === q) {
+      end -= 1;
+    }
+  }
+
+  return unwrapRazorStringBody(text, start, end);
+}
+
+function collectAttributes(text, nameEnd, tagEndIndex) {
+  const attrs = [];
+  let i = nameEnd;
+  const end = tagEndIndex;
+
+  while (i < end) {
+    const ch = text[i];
+    if (ch === '>' || (ch === '/' && text[i + 1] === '>')) {
+      break;
+    }
+    if (isWs(ch)) {
+      i += 1;
+      continue;
+    }
+    if (!isNameStart(ch)) {
+      i += 1;
+      continue;
+    }
+
+    const attrNameStart = i;
+    i += 1;
+    while (i < end && isNameChar(text[i])) {
+      i += 1;
+    }
+    const attrName = text.slice(attrNameStart, i);
+    const attrNameEnd = i;
+
+    let j = i;
+    while (j < end && isWs(text[j])) {
+      j += 1;
+    }
+
+    if (text[j] !== '=') {
+      attrs.push({
+        name: attrName,
+        nameStart: attrNameStart,
+        nameEnd: attrNameEnd,
+        valueStart: null,
+        valueEnd: null,
+        contentStart: null,
+        contentEnd: null
+      });
+      continue;
+    }
+
+    j += 1;
+    while (j < end && isWs(text[j])) {
+      j += 1;
+    }
+
+    const valueStart = j;
+    let valueEnd;
+    if (text[j] === '"' || text[j] === "'") {
+      valueEnd = skipQuoted(text, j);
+    } else if (text[j] === '@') {
+      valueEnd = skipRazorAt(text, j);
+    } else {
+      valueEnd = j;
+      while (valueEnd < end && !isWs(text[valueEnd]) && text[valueEnd] !== '>' && text[valueEnd] !== '/') {
+        valueEnd += 1;
+      }
+    }
+
+    if (valueEnd <= valueStart) {
+      i = j + 1;
+      continue;
+    }
+
+    const content = unwrapAttributeContent(text, valueStart, valueEnd);
+    attrs.push({
+      name: attrName,
+      nameStart: attrNameStart,
+      nameEnd: attrNameEnd,
+      valueStart,
+      valueEnd,
+      contentStart: content.start,
+      contentEnd: content.end
+    });
+    i = valueEnd;
+  }
+
+  return attrs;
+}
+
+function scanOpeningTags(text) {
+  const tags = [];
+  if (!text) return tags;
+
+  let i = 0;
+  const len = text.length;
+  while (i < len) {
+    const skipped = skipTopLevelTrivia(text, i);
+    if (skipped !== i) {
+      i = skipped;
+      continue;
+    }
+    if (text[i] !== '<') {
+      i += 1;
+      continue;
+    }
+
+    const peeked = peekTagName(text, i);
+    if (!peeked) {
+      i += 1;
+      continue;
+    }
+
+    const tag = parseTag(text, i);
+    if (!tag) {
+      i += 1;
+      continue;
+    }
+
+    i = tag.endIndex;
+    if (tag.closing) {
+      continue;
+    }
+
+    tags.push({
+      startIndex: tag.startIndex,
+      endIndex: tag.endIndex,
+      name: tag.name,
+      nameEnd: peeked.nameEnd,
+      selfClosing: tag.selfClosing,
+      attributes: collectAttributes(text, peeked.nameEnd, tag.endIndex)
+    });
+  }
+
+  return tags;
+}
+
+function longestValuedAttribute(attributes) {
+  let best = null;
+  let bestLen = -1;
+  for (const attr of attributes || []) {
+    if (attr.contentStart == null || attr.contentEnd == null) continue;
+    const len = attr.contentEnd - attr.contentStart;
+    if (len > bestLen) {
+      bestLen = len;
+      best = attr;
+    }
+  }
+  return best;
+}
+
+/**
+ * Locate the tag / attribute at a document offset (for selection).
+ * @returns {{tag: object, attribute: object|null, selectAttr: object|null, longest: object|null}|null}
+ */
+function findAttributeContext(text, offset) {
+  const tags = scanOpeningTags(text);
+  for (const tag of tags) {
+    if (offset < tag.startIndex || offset >= tag.endIndex) {
+      continue;
+    }
+
+    let attribute = null;
+    for (const attr of tag.attributes) {
+      const attrEnd = attr.valueEnd != null ? attr.valueEnd : attr.nameEnd;
+      if (offset >= attr.nameStart && offset < attrEnd) {
+        attribute = attr;
+        break;
+      }
+    }
+
+    return {
+      tag,
+      attribute,
+      selectAttr:
+        tag.attributes.find((a) => a.name.toLowerCase() === 'select') || null,
+      longest: longestValuedAttribute(tag.attributes)
+    };
+  }
+  return null;
+}
+
+/**
+ * Attribute to select: the one under the cursor, else `select`, else the longest value.
+ */
+function resolveSelectableAttribute(ctx) {
+  if (!ctx) return null;
+  if (ctx.attribute && ctx.attribute.contentStart != null) {
+    return ctx.attribute;
+  }
+  if (ctx.selectAttr && ctx.selectAttr.contentStart != null) {
+    return ctx.selectAttr;
+  }
+  if (ctx.longest && ctx.longest.contentStart != null) {
+    return ctx.longest;
+  }
+  return null;
 }
 
 /**
@@ -395,6 +667,16 @@ function computeTagHelperFoldingRanges(text, tagHelpersOrNames) {
       pushRange(ranges, startLine, openEndLine);
     }
 
+    const attributes = collectAttributes(text, peeked.nameEnd, tag.endIndex);
+    for (const attr of attributes) {
+      if (attr.valueStart == null) continue;
+      const aStart = positionAt(attr.nameStart).line;
+      const aEnd = positionAt(attr.valueEnd - 1).line;
+      if (aEnd > aStart && (aStart !== startLine || aEnd !== openEndLine)) {
+        pushRange(ranges, aStart, aEnd);
+      }
+    }
+
     if (!tag.selfClosing) {
       stack.push({ name, startLine, openEndLine });
     }
@@ -405,5 +687,9 @@ function computeTagHelperFoldingRanges(text, tagHelpersOrNames) {
 
 module.exports = {
   tagHelperNameSet,
-  computeTagHelperFoldingRanges
+  computeTagHelperFoldingRanges,
+  findAttributeContext,
+  resolveSelectableAttribute,
+  unwrapAttributeContent,
+  scanOpeningTags
 };

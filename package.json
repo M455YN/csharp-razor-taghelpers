@@ -52,8 +52,32 @@
         "command": "csharpRazorTagHelpers.unfoldAll",
         "title": "Unfold All Tag Helpers",
         "category": "C# Razor Tag Helper Support"
+      },
+      {
+        "command": "csharpRazorTagHelpers.selectAttributeValue",
+        "title": "Select Attribute Value",
+        "category": "C# Razor Tag Helper Support"
       }
     ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "csharpRazorTagHelpers.selectAttributeValue",
+          "when": "editorTextFocus && (editorLangId == razor || editorLangId == aspnetcorerazor || resourceExtname == .cshtml || resourceExtname == .razor)",
+          "group": "csharpRazorTagHelpers@1"
+        },
+        {
+          "command": "csharpRazorTagHelpers.foldAll",
+          "when": "editorTextFocus && (editorLangId == razor || editorLangId == aspnetcorerazor || resourceExtname == .cshtml || resourceExtname == .razor)",
+          "group": "csharpRazorTagHelpers@2"
+        },
+        {
+          "command": "csharpRazorTagHelpers.unfoldAll",
+          "when": "editorTextFocus && (editorLangId == razor || editorLangId == aspnetcorerazor || resourceExtname == .cshtml || resourceExtname == .razor)",
+          "group": "csharpRazorTagHelpers@3"
+        }
+      ]
+    },
     "configuration": {
       "title": "C# Razor Tag Helper Support",
       "properties": {

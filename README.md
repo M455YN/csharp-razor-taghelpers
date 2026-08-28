@@ -50,7 +50,22 @@ provides improved editor assistance when working with them.
     attributes, and comments
 -   Command **C# Razor Tag Helper Support: Fold All Tag Helpers** folds
     every Tag Helper in the current file
+-   Multi-line attributes (especially `select` / `lookup-sql` with SQL)
+    get their own fold, so the query can be collapsed without hiding the
+    rest of the tag
 -   Can be turned off with `csharpRazorTagHelpers.enableFolding`
+
+### Select Attribute Value
+
+-   Command **C# Razor Tag Helper Support: Select Attribute Value**
+    selects only the inner value of the attribute under the cursor
+    (the SQL inside `select="@(@" ... ")"`, not the whole `<grid>`)
+-   Also available from the editor **context menu** (right-click) in
+    `.cshtml` / `.razor` files
+-   If the cursor is on the tag name or between attributes, the
+    `select` attribute is used when present
+-   **Expand Selection** (`Shift+Alt+Right` / `Alt+Shift+Right`) grows
+    from the SQL, to the whole attribute, to the whole Tag Helper
 
 ------------------------------------------------------------------------
 

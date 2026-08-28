@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('assert');
-const { computeTagHelperFoldingRanges } = require('../folding');
+const { computeTagHelperFoldingRanges, findAttributeContext, resolveSelectableAttribute } = require('../folding');
 
 function lines(...rows) {
   return rows.join('\n');
@@ -82,7 +82,8 @@ test('verbatim SQL containing /> and <input> does not close the tag early', () =
     '") />'
   );
   assert.deepStrictEqual(startsEnds(computeTagHelperFoldingRanges(text, ['grid'])), [
-    [0, 5]
+    [0, 5],
+    [1, 5]
   ]);
 });
 
@@ -96,7 +97,8 @@ test('regular multi-line quoted attribute containing >', () => {
     '" />'
   );
   assert.deepStrictEqual(startsEnds(computeTagHelperFoldingRanges(text, ['grid'])), [
-    [0, 5]
+    [0, 5],
+    [1, 5]
   ]);
 });
 
@@ -119,7 +121,8 @@ test('ternary with verbatim string then empty string', () => {
     '" : "") />'
   );
   assert.deepStrictEqual(startsEnds(computeTagHelperFoldingRanges(text, ['grid'])), [
-    [0, 3]
+    [0, 3],
+    [1, 3]
   ]);
 });
 
@@ -229,6 +232,51 @@ test('quoted Razor verbatim lookup-sql="@(@" does not fold at SQL >', () => {
   );
   const ranges = computeTagHelperFoldingRanges(text, ['filter']);
   assert.deepStrictEqual(startsEnds(ranges), [[0, 19]]);
+});
+
+test('multi-line select attribute gets its own fold inside the grid', () => {
+  const text = lines(
+    '<grid id="x"',
+    '      new-order="true"',
+    '      select="@(@"',
+    'declare @x int',
+    'select 1 where a > 0',
+    '")" />'
+  );
+  assert.deepStrictEqual(
+    startsEnds(computeTagHelperFoldingRanges(text, ['grid'])),
+    [
+      [0, 5],
+      [2, 5]
+    ]
+  );
+});
+
+test('select attribute content is the SQL only, not the whole tag', () => {
+  const text = lines(
+    '<grid id="grid-talent-matrix"',
+    '      new-order="true"',
+    '      select="@(@"',
+    'declare @colsJ nvarchar(MAX)',
+    "exec sp_executesql @stmt,N'@$$filtersParameters dbo.GridParameters READONLY',@$$filtersParameters",
+    '")" />'
+  );
+  const inSql = findAttributeContext(text, text.indexOf('declare @colsJ'));
+  assert.ok(inSql && inSql.attribute);
+  assert.strictEqual(inSql.attribute.name, 'select');
+  const sql = text.slice(inSql.attribute.contentStart, inSql.attribute.contentEnd);
+  assert.ok(sql.includes('declare @colsJ'));
+  assert.ok(sql.includes('sp_executesql'));
+  assert.ok(!sql.includes('select="@'));
+  assert.ok(!sql.includes('new-order'));
+  assert.ok(!sql.includes('/>'));
+
+  const onTagName = findAttributeContext(text, text.indexOf('grid id'));
+  const fallback = resolveSelectableAttribute(onTagName);
+  assert.ok(fallback);
+  assert.strictEqual(fallback.name, 'select');
+  const fallbackSql = text.slice(fallback.contentStart, fallback.contentEnd);
+  assert.ok(fallbackSql.includes('declare @colsJ'));
 });
 
 test('tag helpers inside script strings are ignored', () => {
