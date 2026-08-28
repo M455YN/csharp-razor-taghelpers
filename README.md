@@ -74,7 +74,6 @@ provides improved editor assistance when working with them.
 ## Requirements
 
 -   Visual Studio Code
--   The official **C# extension** installed
 
 ------------------------------------------------------------------------
 
