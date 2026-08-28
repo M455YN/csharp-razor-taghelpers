@@ -17,7 +17,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Read version
         id: meta
@@ -32,14 +32,6 @@ jobs:
 
       - name: Package VSIX
         run: npx --yes @vscode/vsce package
-
-      - name: Publish to Visual Studio Marketplace
-        uses: HaaLeo/publish-vscode-extension@v2
-        with:
-          pat: ${{ secrets.VS_MARKETPLACE_TOKEN }}
-          registryUrl: https://marketplace.visualstudio.com
-          extensionFile: ${{ steps.meta.outputs.vsix }}
-          skipDuplicate: true
 
       - name: Release notes
         run: node .github/scripts/latest-changelog.js
@@ -59,3 +51,16 @@ jobs:
             --notes-file release-notes.md \
             --target "${GITHUB_SHA}" \
             "$VSIX"
+
+      - name: Publish to Visual Studio Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VS_MARKETPLACE_TOKEN }}
+        run: |
+          if [ -z "$VSCE_PAT" ]; then
+            echo "VS_MARKETPLACE_TOKEN is empty in this job."
+            echo "Use an Azure DevOps PAT (not a GitHub token): Marketplace -> Manage, Organization = All accessible organizations."
+            exit 1
+          fi
+          echo "VS_MARKETPLACE_TOKEN is present (${#VSCE_PAT} characters)."
+          npx --yes @vscode/vsce verify-pat M455YN
+          npx --yes @vscode/vsce publish --packagePath "${{ steps.meta.outputs.vsix }}" --skip-duplicate
