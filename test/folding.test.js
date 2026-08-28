@@ -204,6 +204,33 @@ test("apostrophe in content does not swallow the next helper", () => {
   );
 });
 
+test('quoted Razor verbatim lookup-sql="@(@" does not fold at SQL >', () => {
+  const text = lines(
+    '<filter auto-refresh="isAutoRefreshFilter" parameter-name="programId" label="@L.p("Program")" type="DropDownList" lookup-sql="@(@"',
+    'declare @value int = case when @$$clearP = 1 then null else @programId end',
+    '',
+    'select',
+    '  a.Value',
+    'from',
+    '(',
+    '    select p.Id Value',
+    '    from fmNewGradePeriods gp',
+    '    inner join ffmNewGetProgramStatus(CAST(@onDate as date)) ps on ps.ProgramId = p.Id and ps.Status > 1',
+    '    where gp.Id = @gradePeriodId',
+    '    union',
+    '    select -p.Id Value',
+    '    from fmGradePeriods gp',
+    '    inner join ffmGetProgramStatus(CAST(@onDate as date)) ps on ps.ProgramId = p.Id and ps.Status > 1',
+    '    where -gp.Id = @gradePeriodId',
+    ') a',
+    '',
+    'drop table #kkk',
+    '")" />'
+  );
+  const ranges = computeTagHelperFoldingRanges(text, ['filter']);
+  assert.deepStrictEqual(startsEnds(ranges), [[0, 19]]);
+});
+
 test('tag helpers inside script strings are ignored', () => {
   const text = lines(
     '<filters>',

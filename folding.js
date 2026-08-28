@@ -84,11 +84,52 @@ function skipVerbatim(text, contentStart) {
 function skipQuoted(text, quoteIndex) {
   const q = text[quoteIndex];
   for (let i = quoteIndex + 1; i < text.length; i++) {
+    // HTML attributes often wrap Razor: lookup-sql="@(@" ... ")"
+    // The quote that opens @" must not close the attribute.
+    if (text[i] === '@') {
+      const next = skipRazorAt(text, i);
+      if (next > i) {
+        i = next - 1;
+        continue;
+      }
+    }
     if (text[i] === q) {
       return i + 1;
     }
   }
   return text.length;
+}
+
+/**
+ * Skip a Razor token starting at '@': @@, @* *@, @", @(...), @Name(...).
+ */
+function skipRazorAt(text, i) {
+  if (text[i] !== '@') return i;
+  if (text[i + 1] === '@') return i + 2;
+  if (text[i + 1] === '*') return skipRazorComment(text, i);
+
+  const verbLen = verbatimOpenLength(text, i);
+  if (verbLen) return skipVerbatim(text, i + verbLen);
+
+  if (text[i + 1] === '(') {
+    return skipBalanced(text, i + 1, '(', ')');
+  }
+
+  if (isNameStart(text[i + 1])) {
+    let j = i + 2;
+    while (j < text.length && isNameChar(text[j])) {
+      j += 1;
+    }
+    if (text[j] === '(') {
+      return skipBalanced(text, j, '(', ')');
+    }
+    if (text[j] === '[') {
+      return skipBalanced(text, j, '[', ']');
+    }
+    return j;
+  }
+
+  return i + 1;
 }
 
 function skipRazorComment(text, atIndex) {
@@ -244,8 +285,9 @@ function parseTag(text, ltIndex) {
       continue;
     }
 
-    if (text[i] === '@' && text[i + 1] === '(') {
-      i = skipBalanced(text, i + 1, '(', ')');
+    const razorEnd = skipRazorAt(text, i);
+    if (razorEnd > i) {
+      i = razorEnd;
       continue;
     }
 
