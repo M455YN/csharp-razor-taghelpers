@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
-- Release workflow publishes the VSIX to **Open VSX** (the registry Cursor uses) with the existing Open VSX token. Visual Studio Marketplace publish is optional and needs a separate Azure DevOps PAT (`VSCE_PAT`).
+- Release workflow publishes to **Open VSX** (`OPEN_VSX_TOKEN`) and the official Visual Studio Marketplace (`VS_MARKETPLACE_TOKEN`, Azure DevOps PAT).
 
 ## [1.3.0] - 2026-08-28
 

@@ -54,24 +54,26 @@ jobs:
 
       - name: Publish to Open VSX
         env:
-          OVSX_PAT: ${{ secrets.OVSX_PAT || secrets.VS_MARKETPLACE_TOKEN }}
+          OVSX_PAT: ${{ secrets.OPEN_VSX_TOKEN || secrets.OVSX_PAT }}
         run: |
           if [ -z "$OVSX_PAT" ]; then
-            echo "Missing Open VSX token. Set OVSX_PAT (or VS_MARKETPLACE_TOKEN) to a token from https://open-vsx.org/user-settings/tokens"
+            echo "Missing OPEN_VSX_TOKEN. Create a token at https://open-vsx.org/user-settings/tokens"
             exit 1
           fi
-          echo "Open VSX token is present (${#OVSX_PAT} characters)."
+          echo "OPEN_VSX_TOKEN is present (${#OVSX_PAT} characters)."
           npx --yes ovsx create-namespace M455YN || echo "Namespace M455YN already exists or could not be created; continuing to publish."
           npx --yes ovsx publish "${{ steps.meta.outputs.vsix }}" --skip-duplicate
 
       - name: Publish to Visual Studio Marketplace
         env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          VSCE_PAT: ${{ secrets.VS_MARKETPLACE_TOKEN }}
         run: |
           if [ -z "$VSCE_PAT" ]; then
-            echo "Skipping Visual Studio Marketplace (no VSCE_PAT)."
-            echo "Open VSX tokens do not work here. Create an Azure DevOps PAT (Marketplace -> Manage, All accessible organizations) and store it as VSCE_PAT."
-            exit 0
+            echo "Missing VS_MARKETPLACE_TOKEN."
+            echo "This must be an Azure DevOps PAT (not an Open VSX token): Marketplace -> Manage, Organization = All accessible organizations."
+            echo "If https://dev.azure.com has no Personal access tokens menu, create a free Azure DevOps organization first, then User icon -> Personal access tokens."
+            exit 1
           fi
+          echo "VS_MARKETPLACE_TOKEN is present (${#VSCE_PAT} characters)."
           npx --yes @vscode/vsce verify-pat M455YN
           npx --yes @vscode/vsce publish --packagePath "${{ steps.meta.outputs.vsix }}" --skip-duplicate
