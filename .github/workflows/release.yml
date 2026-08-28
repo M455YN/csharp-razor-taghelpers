@@ -33,6 +33,14 @@ jobs:
       - name: Package VSIX
         run: npx --yes @vscode/vsce package
 
+      - name: Publish to Visual Studio Marketplace
+        uses: HaaLeo/publish-vscode-extension@v2
+        with:
+          pat: ${{ secrets.VS_MARKETPLACE_TOKEN }}
+          registryUrl: https://marketplace.visualstudio.com
+          extensionFile: ${{ steps.meta.outputs.vsix }}
+          skipDuplicate: true
+
       - name: Release notes
         run: node .github/scripts/latest-changelog.js
 
