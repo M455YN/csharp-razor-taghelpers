@@ -87,10 +87,16 @@ function allowedParents(helpers) {
   return { unrestricted, parents };
 }
 
+function isKnownTagHelper(name, tagHelpers) {
+  return matchingTagHelpers(tagHelpers, name).length > 0;
+}
+
 function collectDiagnostics(text, tagHelpers, options) {
   const opts = options || {};
   const unknownAttributes = opts.unknownAttributes !== false;
   const parentTag = opts.parentTag !== false;
+  const closingTags = opts.closingTags !== false;
+  const duplicateAttributes = opts.duplicateAttributes !== false;
   const diagnostics = [];
   if (!text || !tagHelpers || !tagHelpers.length) return diagnostics;
 
@@ -99,17 +105,58 @@ function collectDiagnostics(text, tagHelpers, options) {
   for (const event of collectTagEvents(text)) {
     if (event.type === 'close') {
       const closeName = event.name.toLowerCase();
+      const knownClose = isKnownTagHelper(event.name, tagHelpers);
+
+      if (openStack.length === 0) {
+        if (closingTags && knownClose) {
+          diagnostics.push({
+            start: event.nameStart,
+            end: event.nameEnd,
+            message: 'Unexpected closing tag </' + event.name + '>',
+            severity: 'warning',
+            code: 'unexpected-close'
+          });
+        }
+        continue;
+      }
+
+      const top = openStack[openStack.length - 1];
+      if (top.name === closeName) {
+        openStack.pop();
+        continue;
+      }
+
+      const knownOpen = isKnownTagHelper(top.displayName, tagHelpers);
+      if (closingTags && (knownClose || knownOpen)) {
+        diagnostics.push({
+          start: event.nameStart,
+          end: event.nameEnd,
+          message:
+            'Mismatched closing tag: expected </' +
+            top.displayName +
+            '> but found </' +
+            event.name +
+            '>',
+          severity: 'warning',
+          code: 'mismatched-close'
+        });
+      }
+
+      let matchedIndex = -1;
       for (let i = openStack.length - 1; i >= 0; i--) {
-        if (openStack[i] === closeName) {
-          openStack.length = i;
+        if (openStack[i].name === closeName) {
+          matchedIndex = i;
           break;
         }
+      }
+      if (matchedIndex >= 0) {
+        openStack.length = matchedIndex;
       }
       continue;
     }
 
     const helpers = matchingTagHelpers(tagHelpers, event.name);
-    const parentName = openStack.length ? openStack[openStack.length - 1] : null;
+    const parentName = openStack.length ? openStack[openStack.length - 1].name : null;
 
     if (helpers.length && parentTag) {
       const allowed = allowedParents(helpers);
@@ -157,8 +204,50 @@ function collectDiagnostics(text, tagHelpers, options) {
       }
     }
 
+    if (duplicateAttributes && event.attributes && event.attributes.length) {
+      const seen = new Map();
+      for (const attr of event.attributes) {
+        const n = String(attr.name || '').toLowerCase();
+        if (!n) continue;
+        if (seen.has(n)) {
+          diagnostics.push({
+            start: attr.nameStart,
+            end: attr.nameEnd,
+            message:
+              'Duplicate attribute "' +
+              attr.name +
+              '" on <' +
+              event.name +
+              '>',
+            severity: 'warning',
+            code: 'duplicate-attribute'
+          });
+          continue;
+        }
+        seen.set(n, attr);
+      }
+    }
+
     if (!event.selfClosing) {
-      openStack.push(event.name.toLowerCase());
+      openStack.push({
+        name: event.name.toLowerCase(),
+        displayName: event.name,
+        nameStart: event.nameStart,
+        nameEnd: event.nameEnd
+      });
+    }
+  }
+
+  if (closingTags) {
+    for (const open of openStack) {
+      if (!isKnownTagHelper(open.displayName, tagHelpers)) continue;
+      diagnostics.push({
+        start: open.nameStart,
+        end: open.nameEnd,
+        message: 'Missing closing tag for <' + open.displayName + '>',
+        severity: 'warning',
+        code: 'missing-close'
+      });
     }
   }
 
@@ -167,5 +256,6 @@ function collectDiagnostics(text, tagHelpers, options) {
 
 module.exports = {
   collectDiagnostics,
-  isAllowedExtraAttribute
+  isAllowedExtraAttribute,
+  isKnownTagHelper
 };

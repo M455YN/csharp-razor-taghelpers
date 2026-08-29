@@ -94,6 +94,27 @@ test('HTML data- and aria- attributes are allowed', () => {
   assert.strictEqual(isAllowedExtraAttribute('hide-item-buton-p'), false);
 });
 
+test('duplicate attribute is reported', () => {
+  const text = '<grid id="a" id="b" select="x" />';
+  const diags = collectDiagnostics(text, helpers).filter((d) => d.code === 'duplicate-attribute');
+  assert.strictEqual(diags.length, 1);
+  assert.ok(diags[0].message.includes('id'));
+});
+
+test('missing closing tag for known tag helper is reported', () => {
+  const text = lines('<filters id="f1">', '  <filters-group>', '  </filters-group>');
+  const diags = collectDiagnostics(text, helpers).filter((d) => d.code === 'missing-close');
+  assert.strictEqual(diags.length, 1);
+  assert.ok(diags[0].message.includes('<filters>'));
+});
+
+test('mismatched closing tag is reported', () => {
+  const text = lines('<filters id="f1">', '  <filters-group>', '  </filters>', '</filters-group>');
+  const diags = collectDiagnostics(text, helpers).filter((d) => d.code === 'mismatched-close');
+  assert.strictEqual(diags.length, 1);
+  assert.ok(diags[0].message.includes('filters-group'));
+});
+
 if (!process.exitCode) {
   console.log('All outline/diagnostics tests passed.');
 }

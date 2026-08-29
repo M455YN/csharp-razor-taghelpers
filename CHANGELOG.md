@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-08-29
+
+### Added
+
+- **Diagnostics:** missing, mismatched, and unexpected closing tags for discovered Tag Helpers (`diagnostics.closingTags`).
+- **Diagnostics:** duplicate attributes on a Tag Helper element (`diagnostics.duplicateAttributes`).
+- **Tag Helpers** tree in the Explorer sidebar: C# files → elements → attributes; click opens the class or property.
+- **Full-tag snippets** when completing a Tag Helper element name (`insertFullTagSnippets`, default `true`).
+- **Inlay hints** in Razor files: C# property name and type next to Tag Helper attributes, class name next to the element (`inlayHints.*` settings).
+
+### Fixed
+
+- **Go to Definition (F12)** in `.cshtml`/`.razor`: reliable `Location` results and broader document selectors for embedded HTML regions.
+
 ### Changed
 
 - New extension icon: monochrome razor-blade design aligned with the M455YN brand (black background, high-contrast white stencil, directional lighting). Marketplace gallery banner color updated to `#000000`.
@@ -163,7 +177,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Command **C# Razor Tag Helpers: Refresh** to rescan Tag Helpers manually.
 - Output channel **C# Razor Tag Helper Support** for scan progress and results.
 
-[Unreleased]: https://github.com/M455YN/csharp-razor-taghelpers/compare/v1.3.1...HEAD
+[Unreleased]: https://github.com/M455YN/csharp-razor-taghelpers/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/M455YN/csharp-razor-taghelpers/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/M455YN/csharp-razor-taghelpers/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/M455YN/csharp-razor-taghelpers/compare/v1.2.2...v1.3.0
 [1.1.1]: https://github.com/M455YN/csharp-razor-taghelpers/compare/v1.1.0...v1.1.1

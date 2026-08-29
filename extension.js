@@ -1,10 +1,13 @@
 const vscode = require('vscode');
-const { computeTagHelperFoldingRanges, findAttributeContext, resolveSelectableAttribute, findDefinitionTarget } = require('./folding');
-const { matchingTagHelpers, findSymbolInCSharpText } = require('./definition');
+const path = require('path');
+const { computeTagHelperFoldingRanges, findAttributeContext, resolveSelectableAttribute } = require('./folding');
+const { resolveTagHelperDefinitions } = require('./definition');
 const { collectSqlRanges, DEFAULT_SQL_RULES } = require('./sqlHighlight');
 const { collectOutline } = require('./outline');
 const { collectDiagnostics } = require('./diagnostics');
 const { registerWhatsNew } = require('./whatsNew');
+const { registerTagHelpersTree } = require('./tagHelpersTree');
+const { collectInlayHints, simplifyCSharpType } = require('./inlayHints');
 
 
 /**
@@ -29,6 +32,8 @@ let outputChannel = null;
 let rescanTimeout = null;
 let foldingRangesChanged = null;
 let diagnosticsRefresh = null;
+let tagHelpersTreeRefresh = null;
+let inlayHintsRefresh = null;
 
 function debounce(fn, ms) {
   return function () {
@@ -286,6 +291,8 @@ function parseTagHelpersWithRegex(uri, text, globalEnumValues) {
 
     const attributes = [];
     const attributeSummaries = {};
+    const attributeTypes = {};
+    const attributePropertyNames = {};
     const propRegex =
       /public\s+([\w<>\.\?\[\]\s]+)\s+(\w+)\s*\{\s*get;\s*set;\s*\}/g;
     const valueSuggestions = {};
@@ -295,10 +302,15 @@ function parseTagHelpersWithRegex(uri, text, globalEnumValues) {
       const propName = propMatch[2];
       const kebabName = pascalToKebab(propName);
       attributes.push(kebabName);
+      attributePropertyNames[kebabName] = propName;
       if (propertySummaries[propName]) {
         attributeSummaries[kebabName] = propertySummaries[propName];
       }
       if (propType) {
+        const simplified = simplifyCSharpType(propType);
+        if (simplified) {
+          attributeTypes[kebabName] = simplified;
+        }
         const simpleType = propType
           .replace(/\?$/, '')
           .split(/[<>\s]/)
@@ -322,6 +334,8 @@ function parseTagHelpersWithRegex(uri, text, globalEnumValues) {
       parentTag: classParentTags[className] || null,
       summary: classSummaries[className],
       attributeSummaries,
+      attributeTypes,
+      attributePropertyNames,
       valueSuggestions
     });
 
@@ -432,6 +446,22 @@ async function scanForTagHelpers() {
     }
     th.attributeSummaries = mergedSummaries;
 
+    const mergedTypes = Object.assign({}, base.attributeTypes || {});
+    if (th.attributeTypes) {
+      for (const [key, val] of Object.entries(th.attributeTypes)) {
+        mergedTypes[key] = val;
+      }
+    }
+    th.attributeTypes = mergedTypes;
+
+    const mergedPropNames = Object.assign({}, base.attributePropertyNames || {});
+    if (th.attributePropertyNames) {
+      for (const [key, val] of Object.entries(th.attributePropertyNames)) {
+        mergedPropNames[key] = val;
+      }
+    }
+    th.attributePropertyNames = mergedPropNames;
+
     const mergedValues = Object.assign({}, base.valueSuggestions || {});
     if (th.valueSuggestions) {
       for (const [key, val] of Object.entries(th.valueSuggestions)) {
@@ -465,6 +495,12 @@ async function refreshTagHelpers(showNotification = false) {
     }
     if (typeof diagnosticsRefresh === 'function') {
       diagnosticsRefresh();
+    }
+    if (typeof tagHelpersTreeRefresh === 'function') {
+      tagHelpersTreeRefresh();
+    }
+    if (typeof inlayHintsRefresh === 'function') {
+      inlayHintsRefresh();
     }
 
     // Notification in the bottom right corner of VS Code after the scan is complete
@@ -573,17 +609,27 @@ function registerCompletionProvider(context) {
 
         // If we are in the tag name, show only the list of all elements (no attributes)
         if (inTagName) {
+          const insertFullTagSnippets = cfg.get('insertFullTagSnippets', true);
           for (const th of currentTagHelpers) {
             if (tagName && !th.elementName.startsWith(tagName)) {
               continue;
             }
             const elementItem = new vscode.CompletionItem(
               th.elementName,
-              vscode.CompletionItemKind.Class
+              insertFullTagSnippets
+                ? vscode.CompletionItemKind.Snippet
+                : vscode.CompletionItemKind.Class
             );
-            elementItem.insertText = th.elementName;
+            if (insertFullTagSnippets) {
+              elementItem.insertText = new vscode.SnippetString(
+                `${th.elementName}>\n\t$0\n</${th.elementName}>`
+              );
+              elementItem.detail = `Tag Helper snippet (${th.className})`;
+            } else {
+              elementItem.insertText = th.elementName;
+              elementItem.detail = `Tag Helper element (${th.className})`;
+            }
             elementItem.sortText = '\u0000' + th.elementName;
-            elementItem.detail = `Tag Helper element (${th.className})`;
             if (th.summary) {
               elementItem.documentation = new vscode.MarkdownString(th.summary);
             } else {
@@ -790,11 +836,19 @@ async function activate(context) {
   registerSqlHighlighting(context);
   registerOutline(context);
   registerDiagnostics(context);
+  registerInlayHints(context);
   registerWhatsNew(context);
+  tagHelpersTreeRefresh = registerTagHelpersTree(context, () => currentTagHelpers);
 }
 
 function razorSelector() {
-  return [{ language: 'razor' }, { language: 'aspnetcorerazor' }];
+  return [
+    { language: 'razor' },
+    { language: 'aspnetcorerazor' },
+    { language: 'html', pattern: '**/*.{cshtml,razor}' },
+    { pattern: '**/*.cshtml', scheme: 'file' },
+    { pattern: '**/*.razor', scheme: 'file' }
+  ];
 }
 
 function isRazorDocument(document) {
@@ -1049,83 +1103,64 @@ function registerAttributeSelection(context) {
 }
 
 function registerGoToDefinition(context) {
+  async function openCSharpDocument(filePath) {
+    if (!filePath) return null;
+    try {
+      return await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+    } catch {
+      const base = path.basename(filePath);
+      const found = await vscode.workspace.findFiles(
+        `**/${base}`,
+        CS_EXCLUDE_GLOB,
+        1
+      );
+      if (!found.length) return null;
+      return vscode.workspace.openTextDocument(found[0]);
+    }
+  }
+
+  async function loadFileText(filePath) {
+    const doc = await openCSharpDocument(filePath);
+    return doc ? doc.getText() : null;
+  }
+
+  async function provideDefinitions(document, position) {
+    if (!currentTagHelpers.length) {
+      return null;
+    }
+    const text = document.getText();
+    const offset = document.offsetAt(position);
+    const resolved = await resolveTagHelperDefinitions(
+      text,
+      offset,
+      currentTagHelpers,
+      loadFileText
+    );
+    if (!resolved.length) {
+      return null;
+    }
+
+    const locations = [];
+    for (const item of resolved) {
+      const csDoc = await openCSharpDocument(item.file);
+      if (!csDoc) continue;
+      const targetRange = new vscode.Range(
+        csDoc.positionAt(item.start),
+        csDoc.positionAt(item.end)
+      );
+      locations.push(new vscode.Location(csDoc.uri, targetRange));
+    }
+
+    if (!locations.length) {
+      return null;
+    }
+    // Location[] — reliable F12; LocationLink[] alone breaks Go to Definition in Razor.
+    return locations.length === 1 ? locations[0] : locations;
+  }
+
   const provider = vscode.languages.registerDefinitionProvider(razorSelector(), {
-    async provideDefinition(document, position) {
-      if (!currentTagHelpers.length) {
-        return [];
-      }
-      const text = document.getText();
-      const offset = document.offsetAt(position);
-      const target = findDefinitionTarget(text, offset);
-      if (!target) {
-        return [];
-      }
-
-      const elementName = target.type === 'element' ? target.name : target.tagName;
-      const helpers = matchingTagHelpers(currentTagHelpers, elementName);
-      if (!helpers.length) {
-        return [];
-      }
-
-      const locations = [];
-      const seen = new Set();
-
-      const addFromHelper = async (th, kebab) => {
-        if (!th || !th.file) return;
-        const key = th.file + '|' + th.className + '|' + (kebab || '');
-        if (seen.has(key)) return;
-        seen.add(key);
-        try {
-          const csDoc = await vscode.workspace.openTextDocument(th.file);
-          const found = findSymbolInCSharpText(
-            csDoc.getText(),
-            th.className,
-            kebab || null
-          );
-          if (!found || found.missingProperty) {
-            return found && found.missingProperty ? found : null;
-          }
-          const start = csDoc.positionAt(found.offset);
-          const end = csDoc.positionAt(found.offset + found.length);
-          locations.push(new vscode.Location(csDoc.uri, new vscode.Range(start, end)));
-          return found;
-        } catch {
-          return null;
-        }
-      };
-
-      if (target.type === 'element') {
-        for (const th of helpers) {
-          await addFromHelper(th, null);
-        }
-      } else {
-        for (const th of helpers) {
-          const found = await addFromHelper(th, target.name);
-          if (found && found.missingProperty && th.baseClassName) {
-            const base = currentTagHelpers.find(
-              (h) => h.className === th.baseClassName
-            );
-            const baseFound = await addFromHelper(base, target.name);
-            if (!baseFound || baseFound.missingProperty) {
-              const csDoc = await vscode.workspace.openTextDocument(th.file);
-              const start = csDoc.positionAt(found.offset);
-              const end = csDoc.positionAt(found.offset + found.length);
-              locations.push(
-                new vscode.Location(csDoc.uri, new vscode.Range(start, end))
-              );
-            }
-          } else if (found && found.missingProperty) {
-            const csDoc = await vscode.workspace.openTextDocument(th.file);
-            const start = csDoc.positionAt(found.offset);
-            const end = csDoc.positionAt(found.offset + found.length);
-            locations.push(
-              new vscode.Location(csDoc.uri, new vscode.Range(start, end))
-            );
-          }
-        }
-      }
-
-      return locations;
+    provideDefinition(document, position) {
+      return provideDefinitions(document, position);
     }
   });
   context.subscriptions.push(provider);
@@ -1248,6 +1283,58 @@ function registerOutline(context) {
   context.subscriptions.push(provider);
 }
 
+function registerInlayHints(context) {
+  const emitter = new vscode.EventEmitter();
+
+  const provider = vscode.languages.registerInlayHintsProvider(razorSelector(), {
+    onDidChangeInlayHints: emitter.event,
+    provideInlayHints(document, range, token) {
+      if (token.isCancellationRequested || !isRazorDocument(document)) {
+        return { hints: [] };
+      }
+      const cfg = vscode.workspace.getConfiguration(
+        'csharpRazorTagHelpers',
+        document.uri
+      );
+      if (!cfg.get('inlayHints.enabled', true) || !currentTagHelpers.length) {
+        return { hints: [] };
+      }
+
+      const text = document.getText();
+      const raw = collectInlayHints(text, currentTagHelpers, {
+        showTypes: cfg.get('inlayHints.showTypes', true),
+        showPropertyNames: cfg.get('inlayHints.showPropertyNames', true),
+        showClassNames: cfg.get('inlayHints.showClassNames', true)
+      });
+
+      const rangeStart = document.offsetAt(range.start);
+      const rangeEnd = document.offsetAt(range.end);
+      const hints = [];
+
+      for (const item of raw) {
+        if (item.offset < rangeStart || item.offset > rangeEnd) {
+          continue;
+        }
+        const pos = document.positionAt(item.offset);
+        const kind =
+          item.kind === 'parameter'
+            ? vscode.InlayHintKind.Parameter
+            : vscode.InlayHintKind.Type;
+        const hint = new vscode.InlayHint(pos, item.label, kind);
+        if (item.tooltip) {
+          hint.tooltip = item.tooltip;
+        }
+        hints.push(hint);
+      }
+
+      return { hints };
+    }
+  });
+
+  context.subscriptions.push(provider, emitter);
+  inlayHintsRefresh = () => emitter.fire(undefined);
+}
+
 function registerDiagnostics(context) {
   const collection = vscode.languages.createDiagnosticCollection(
     'csharpRazorTagHelpers'
@@ -1268,7 +1355,9 @@ function registerDiagnostics(context) {
     }
     const items = collectDiagnostics(document.getText(), currentTagHelpers, {
       unknownAttributes: cfg.get('diagnostics.unknownAttributes', true),
-      parentTag: cfg.get('diagnostics.parentTag', true)
+      parentTag: cfg.get('diagnostics.parentTag', true),
+      closingTags: cfg.get('diagnostics.closingTags', true),
+      duplicateAttributes: cfg.get('diagnostics.duplicateAttributes', true)
     });
     collection.set(
       document.uri,

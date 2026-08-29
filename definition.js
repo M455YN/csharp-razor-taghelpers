@@ -1,5 +1,7 @@
 'use strict';
 
+const { findDefinitionTarget } = require('./folding');
+
 function escapeRegExp(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -64,8 +66,99 @@ function matchingTagHelpers(tagHelpers, elementName) {
   );
 }
 
+/**
+ * Resolve Tag Helper / attribute definitions for Go to Definition and Peek (Alt+F12).
+ * @returns {Promise<Array<{file: string, start: number, end: number, originStart: number, originEnd: number}>>}
+ */
+async function resolveTagHelperDefinitions(text, offset, tagHelpers, loadFileText) {
+  if (!text || offset == null || !tagHelpers || !tagHelpers.length) {
+    return [];
+  }
+
+  const target = findDefinitionTarget(text, offset);
+  if (!target) {
+    return [];
+  }
+
+  const elementName = target.type === 'element' ? target.name : target.tagName;
+  const helpers = matchingTagHelpers(tagHelpers, elementName);
+  if (!helpers.length) {
+    return [];
+  }
+
+  const locations = [];
+  const seen = new Set();
+
+  const addFromHelper = async (th, kebab) => {
+    if (!th || !th.file) return null;
+    const key = th.file + '|' + th.className + '|' + (kebab || '');
+    if (seen.has(key)) return null;
+    seen.add(key);
+    const csText = await loadFileText(th.file);
+    if (csText == null) return null;
+    const found = findSymbolInCSharpText(csText, th.className, kebab || null);
+    if (!found || found.missingProperty) {
+      return found && found.missingProperty ? found : null;
+    }
+    locations.push({
+      file: th.file,
+      start: found.offset,
+      end: found.offset + found.length,
+      originStart: target.originStart,
+      originEnd: target.originEnd
+    });
+    return found;
+  };
+
+  if (target.type === 'element') {
+    for (const th of helpers) {
+      await addFromHelper(th, null);
+    }
+  } else {
+    for (const th of helpers) {
+      const found = await addFromHelper(th, target.name);
+      if (found && found.missingProperty && th.baseClassName) {
+        const base = tagHelpers.find((h) => h.className === th.baseClassName);
+        const baseFound = await addFromHelper(base, target.name);
+        if (!baseFound || baseFound.missingProperty) {
+          const csText = await loadFileText(th.file);
+          if (csText != null) {
+            const fallback = findSymbolInCSharpText(csText, th.className, null);
+            if (fallback) {
+              locations.push({
+                file: th.file,
+                start: fallback.offset,
+                end: fallback.offset + fallback.length,
+                originStart: target.originStart,
+                originEnd: target.originEnd
+              });
+            }
+          }
+        }
+      } else if (found && found.missingProperty) {
+        const csText = await loadFileText(th.file);
+        if (csText != null) {
+          const fallback = findSymbolInCSharpText(csText, th.className, null);
+          if (fallback) {
+            locations.push({
+              file: th.file,
+              start: fallback.offset,
+              end: fallback.offset + fallback.length,
+              originStart: target.originStart,
+              originEnd: target.originEnd
+            });
+          }
+        }
+      }
+    }
+  }
+
+  return locations;
+}
+
 module.exports = {
   kebabToPascal,
   findSymbolInCSharpText,
-  matchingTagHelpers
+  matchingTagHelpers,
+  resolveTagHelperDefinitions
 };

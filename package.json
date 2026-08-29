@@ -2,7 +2,7 @@
   "name": "csharp-razor-taghelpers",
   "displayName": "C# Razor Tag Helper Support",
   "description": "Enhanced C# and .NET development in VS Code with IntelliSense and hover support for custom Razor Tag Helpers.",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "publisher": "M455YN",
   "author": {
     "name": "Mateusz Afelt"
@@ -67,9 +67,34 @@
         "command": "csharpRazorTagHelpers.showWhatsNew",
         "title": "What's New",
         "category": "C# Razor Tag Helper Support"
+      },
+      {
+        "command": "csharpRazorTagHelpers.openTagHelperSymbol",
+        "title": "Open Tag Helper Symbol",
+        "category": "C# Razor Tag Helper Support"
+      },
+      {
+        "command": "csharpRazorTagHelpers.refreshTree",
+        "title": "Refresh Tag Helpers Tree",
+        "category": "C# Razor Tag Helper Support"
       }
     ],
+    "views": {
+      "explorer": [
+        {
+          "id": "csharpRazorTagHelpers.explorer",
+          "name": "Tag Helpers"
+        }
+      ]
+    },
     "menus": {
+      "view/title": [
+        {
+          "command": "csharpRazorTagHelpers.refreshTree",
+          "when": "view == csharpRazorTagHelpers.explorer",
+          "group": "navigation"
+        }
+      ],
       "editor/context": [
         {
           "command": "csharpRazorTagHelpers.selectAttributeValue",
@@ -119,7 +144,7 @@
         "csharpRazorTagHelpers.diagnostics.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Show Tag Helper warnings in Razor files (unknown attributes, ParentTag)."
+          "description": "Show Tag Helper warnings in Razor files (unknown attributes, ParentTag, closing tags, duplicate attributes)."
         },
         "csharpRazorTagHelpers.diagnostics.unknownAttributes": {
           "type": "boolean",
@@ -130,6 +155,41 @@
           "type": "boolean",
           "default": true,
           "description": "Warn when a Tag Helper is used outside its HtmlTargetElement ParentTag (e.g. <filter> outside <filters-group>)."
+        },
+        "csharpRazorTagHelpers.diagnostics.closingTags": {
+          "type": "boolean",
+          "default": true,
+          "description": "Warn about missing, mismatched, or unexpected closing tags for discovered Tag Helpers."
+        },
+        "csharpRazorTagHelpers.diagnostics.duplicateAttributes": {
+          "type": "boolean",
+          "default": true,
+          "description": "Warn when the same attribute appears more than once on a Tag Helper element."
+        },
+        "csharpRazorTagHelpers.insertFullTagSnippets": {
+          "type": "boolean",
+          "default": true,
+          "description": "When completing a Tag Helper element name, insert a full <tag>...</tag> snippet instead of only the tag name."
+        },
+        "csharpRazorTagHelpers.inlayHints.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show inlay hints for Tag Helper elements and attributes in Razor files."
+        },
+        "csharpRazorTagHelpers.inlayHints.showPropertyNames": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the C# property name next to each Tag Helper attribute (e.g. select → Select)."
+        },
+        "csharpRazorTagHelpers.inlayHints.showTypes": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the C# property type next to each Tag Helper attribute (e.g. : bool, : string)."
+        },
+        "csharpRazorTagHelpers.inlayHints.showClassNames": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the Tag Helper class name next to the element name (e.g. grid → : GridTagHelper)."
         },
         "csharpRazorTagHelpers.sqlHighlighting.enabled": {
           "type": "boolean",
@@ -155,7 +215,9 @@
           ],
           "items": {
             "type": "object",
-            "required": ["attributes"],
+            "required": [
+              "attributes"
+            ],
             "properties": {
               "tag": {
                 "type": "string",
@@ -164,7 +226,9 @@
               },
               "attributes": {
                 "type": "array",
-                "items": { "type": "string" },
+                "items": {
+                  "type": "string"
+                },
                 "description": "Attribute names (kebab-case). Use * for all attributes of that tag."
               }
             }
@@ -219,6 +283,8 @@
     "outline.js",
     "diagnostics.js",
     "whatsNew.js",
+    "tagHelpersTree.js",
+    "inlayHints.js",
     "logo.png",
     "README.md",
     "CHANGELOG.md",
@@ -226,7 +292,7 @@
   ],
   "scripts": {
     "lint": "echo \"No lint configured\"",
-    "test": "node test/folding.test.js && node test/definition.test.js && node test/sql.test.js && node test/outline-diagnostics.test.js && node test/whatsNew.test.js"
+    "test": "node test/folding.test.js && node test/definition.test.js && node test/sql.test.js && node test/outline-diagnostics.test.js && node test/inlayHints.test.js && node test/whatsNew.test.js"
   },
   "license": "MIT",
   "bugs": {
@@ -236,5 +302,9 @@
     "type": "git",
     "url": "https://github.com/M455YN/csharp-razor-taghelpers"
   },
-  "homepage": "https://github.com/M455YN/csharp-razor-taghelpers"
+  "homepage": "https://github.com/M455YN/csharp-razor-taghelpers",
+  "dependencies": {
+    "@vscode/vsce": "^3.9.2",
+    "vsce": "^2.15.0"
+  }
 }

@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('assert');
-const { kebabToPascal, findSymbolInCSharpText, matchingTagHelpers } = require('../definition');
+const { kebabToPascal, findSymbolInCSharpText, matchingTagHelpers, resolveTagHelperDefinitions } = require('../definition');
 const { findDefinitionTarget } = require('../folding');
 
 function test(name, fn) {
@@ -75,6 +75,26 @@ test('matchingTagHelpers filters by element name', () => {
   assert.strictEqual(matchingTagHelpers(helpers, 'GRID')[0].className, 'GridTagHelper');
 });
 
-if (!process.exitCode) {
-  console.log('All definition tests passed.');
+async function runAsyncTests() {
+  const cs = 'public class GridTagHelper { public string Select { get; set; } }';
+  const razor = '<grid select="x" />';
+  const offset = razor.indexOf('select');
+  const defs = await resolveTagHelperDefinitions(razor, offset, [
+    { elementName: 'grid', className: 'GridTagHelper', file: 'GridTagHelper.cs' }
+  ], async () => cs);
+  assert.strictEqual(defs.length, 1);
+  assert.strictEqual(cs.slice(defs[0].start, defs[0].end), 'Select');
+  assert.strictEqual(defs[0].originStart, razor.indexOf('select'));
 }
+
+runAsyncTests()
+  .then(() => {
+    if (!process.exitCode) {
+      console.log('All definition tests passed.');
+    }
+  })
+  .catch((err) => {
+    console.error('not ok - resolveTagHelperDefinitions');
+    console.error(err && err.stack ? err.stack : err);
+    process.exitCode = 1;
+  });
