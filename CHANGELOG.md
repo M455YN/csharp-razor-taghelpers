@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- New extension icon: monochrome razor-blade design aligned with the M455YN brand (black background, high-contrast white stencil, directional lighting). Marketplace gallery banner color updated to `#000000`.
+- Added vector source `logo.svg` and `scripts/export-logo.js` to regenerate `logo.png`.
+
 ## [1.3.1] - 2026-08-28
 
 ### Changed
