@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.4.2] - 2026-08-31
+
+### Fixed
+
+- **Go to Definition (F12)** and **unknown-attribute diagnostics** for Tag Helper properties whose C# types contain generic parameters with commas, e.g. `List<KeyValuePair<long, T>>` and `Dictionary<String, object>` (attributes such as `advanced-payload`, `sql-parameters`). ([#1](https://github.com/M455YN/csharp-razor-taghelpers/issues/1), [#2](https://github.com/M455YN/csharp-razor-taghelpers/pull/2) — thanks [@PIXEL236](https://github.com/PIXEL236))
+- The initial fix in `definition.js` covered Go to Definition only; the Tag Helper scanner in `extension.js` used a separate property regex that still omitted commas, so those attributes were missing from the known-attribute list and diagnostics kept reporting them as unknown.
+
+### Changed
+
+- Tag Helper scanning logic moved from `extension.js` to `tagHelperScan.js` (no behaviour change beyond the fix above).
+
+### Added
+
+- Regression tests for `List` / `Dictionary` property discovery and for `sql-parameters` not being flagged as an unknown attribute (`test/scan.test.js`, extended `test/definition.test.js`).
+
 ## [1.4.1] - 2026-08-29
 
 ### Fixed
