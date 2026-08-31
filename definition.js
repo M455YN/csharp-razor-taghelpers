@@ -43,7 +43,7 @@ function findSymbolInCSharpText(text, className, propertyKebab) {
 
   const slice = text.slice(body.start, body.end);
   const propRe = new RegExp(
-    'public\\s+[\\w<\w\,>\\.\\?\\[\\]\\s]+\\s+(' + escapeRegExp(pascal) + ')\\s*\\{',
+    'public\\s+[\\w<>\\.\\?\\[\\],\\s]+\\s+(' + escapeRegExp(pascal) + ')\\s*\\{',
     'i'
   );
   const propMatch = propRe.exec(slice);
