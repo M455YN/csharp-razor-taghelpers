@@ -285,6 +285,7 @@
     "whatsNew.js",
     "tagHelpersTree.js",
     "inlayHints.js",
+    "tagHelperScan.js",
     "logo.png",
     "README.md",
     "CHANGELOG.md",
@@ -292,7 +293,7 @@
   ],
   "scripts": {
     "lint": "echo \"No lint configured\"",
-    "test": "node test/folding.test.js && node test/definition.test.js && node test/sql.test.js && node test/outline-diagnostics.test.js && node test/inlayHints.test.js && node test/whatsNew.test.js"
+    "test": "node test/folding.test.js && node test/definition.test.js && node test/sql.test.js && node test/outline-diagnostics.test.js && node test/inlayHints.test.js && node test/whatsNew.test.js && node test/scan.test.js"
   },
   "license": "MIT",
   "bugs": {

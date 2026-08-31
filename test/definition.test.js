@@ -28,6 +28,8 @@ test('findSymbolInCSharpText locates class and property', () => {
     '{',
     '    public string Select { get; set; }',
     '    public bool NewOrder { get; set; }',
+    '    public List<KeyValuePair<long, AdvancedPayload>> AdvancedPayload { get; set; }',
+    '    public Dictionary<String, object> SqlParameters { get; set; }',
     '}'
   ].join('\n');
   const cls = findSymbolInCSharpText(cs, 'GridTagHelper', null);
@@ -35,6 +37,12 @@ test('findSymbolInCSharpText locates class and property', () => {
   const prop = findSymbolInCSharpText(cs, 'GridTagHelper', 'new-order');
   assert.strictEqual(prop.kind, 'property');
   assert.strictEqual(cs.slice(prop.offset, prop.offset + prop.length), 'NewOrder');
+  const prop2 = findSymbolInCSharpText(cs, 'GridTagHelper', 'sql-parameters');
+  assert.strictEqual(prop2.kind, 'property');
+  assert.strictEqual(cs.slice(prop2.offset, prop2.offset + prop2.length), 'SqlParameters');
+  const prop3 = findSymbolInCSharpText(cs, 'GridTagHelper', 'advanced-payload');
+  assert.strictEqual(prop3.kind, 'property');
+  assert.strictEqual(cs.slice(prop3.offset, prop3.offset + prop3.length), 'AdvancedPayload');
 });
 
 test('missing property falls back to class', () => {
