@@ -91,6 +91,21 @@ provides improved editor assistance when working with them.
     include `*` (every attribute of that tag)
 -   Turn off with `csharpRazorTagHelpers.sqlHighlighting.enabled`
 
+### SQL in SQL Server Management Studio, and its syntax errors
+
+-   **Open … in SQL Server Management Studio** above each of those
+    attributes opens its SQL in the newest SSMS installed, runnable: the
+    C# string's `""` made `"`, and a `declare` for each variable the app
+    passes in (`@UserEmployeeId`, `@$DateFrom`, a table for one read
+    `from`), to be given values. SSMS connects with the server, database
+    and login of a connection string of the nearest `appsettings*.json`
+    above the page (asked when several; the password is never passed).
+    Turn off with `csharpRazorTagHelpers.sqlCodeLens.enabled`
+-   With the **CSharpShooter SQL** extension installed, the SQL's syntax
+    errors are underlined as you type, from its SQL Tools Service, with no
+    connection to a server. Turn off with
+    `csharpRazorTagHelpers.sqlDiagnostics.enabled`
+
 ### Outline
 
 -   Tag Helpers appear in **Outline** / breadcrumbs as nested symbols

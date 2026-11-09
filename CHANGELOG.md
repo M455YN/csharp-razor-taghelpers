@@ -8,7 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- **Open SQL from a Tag Helper:** CodeLens above each attribute holding SQL (the `sqlHighlighting.rules` attributes, e.g. `select`, `insert`) opens it as a runnable query: the verbatim string's `""` made `"`, and a `declare` for each variable the app passes in (typed by name, a table for one read `from`/`join`). *Open in SQL Server Management Studio* saves it to `%TEMP%\csharpshooter-sql` and starts the newest SSMS on it with `-S`, `-d`, `-U`/`-A`, `-C`, `-N` from a connection string of the nearest `appsettings*.json` above the page (never the password); *Open in SQL editor* opens it in CSharpShooter SQL's query window when that extension is installed. `sqlCodeLens.enabled` turns them off.
+- **Open SQL from a Tag Helper:** CodeLens above each attribute holding SQL (the `sqlHighlighting.rules` attributes, e.g. `select`, `insert`) opens it as a runnable query: the verbatim string's `""` made `"`, and a `declare` for each variable the app passes in (typed by name, a table for one read `from`/`join`). *Open in SQL Server Management Studio* saves it to `%TEMP%\csharpshooter-sql` and starts the newest SSMS on it with `-S`, `-d`, `-U`/`-A`, `-C`, `-N` from a connection string of the nearest `appsettings*.json` above the page (never the password). `sqlCodeLens.enabled` turns it off.
+- **SQL syntax errors in Tag Helpers:** with the CSharpShooter SQL extension installed, the SQL of those attributes is checked as you type (every block of a page at once, a quarter second after typing stops) by its SQL Tools Service's parser, with no connection to a server, and its syntax errors are underlined where they are in the page and listed in Problems (`SQL (grid select)`). `sqlDiagnostics.enabled` turns it off.
 
 ## [1.4.2] - 2026-08-31
 

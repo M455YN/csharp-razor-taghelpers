@@ -3,7 +3,7 @@ const path = require('path');
 const { computeTagHelperFoldingRanges, findAttributeContext, resolveSelectableAttribute } = require('./folding');
 const { resolveTagHelperDefinitions } = require('./definition');
 const { collectSqlRanges, DEFAULT_SQL_RULES } = require('./sqlHighlight');
-const { runnableSql } = require('./sqlQuery');
+const { runnableSql, checkedSql, sourceOffset } = require('./sqlQuery');
 const { projectConnections, openInSsms } = require('./ssms');
 const { collectOutline } = require('./outline');
 const { collectDiagnostics } = require('./diagnostics');
@@ -648,6 +648,7 @@ async function activate(context) {
   registerGoToDefinition(context);
   registerSqlHighlighting(context);
   registerSqlCodeLens(context);
+  registerSqlDiagnostics(context);
   registerOutline(context);
   registerDiagnostics(context);
   registerInlayHints(context);
@@ -1065,8 +1066,9 @@ function registerSqlHighlighting(context) {
   schedule();
 }
 
-// The SQL of a Tag Helper's attribute opened as a query, with a DECLARE for what the app passes in, on a connection string
-// of the page's project: in SQL Server Management Studio, and in CSharpShooter SQL's query window when it is installed.
+// The SQL of a Tag Helper's attribute: opened in SQL Server Management Studio as a query, with a DECLARE for what the app
+// passes in, on a connection string of the page's project; and, with CSharpShooter SQL installed, its syntax errors
+// underlined in the page, from that extension's SQL Tools Service.
 const SQL_EXTENSION = 'M455YN.csharpshooter-sql';
 
 async function openSqlInSsms(query) {
@@ -1099,21 +1101,18 @@ function registerSqlCodeLens(context) {
       provideCodeLenses(document) {
         const cfg = vscode.workspace.getConfiguration('csharpRazorTagHelpers', document.uri);
         if (!cfg.get('sqlCodeLens.enabled', true)) return [];
-        const editor = !!vscode.extensions.getExtension(SQL_EXTENSION);
         const text = document.getText();
         const lenses = [];
         for (const block of collectSqlRanges(text, cfg.get('sqlHighlighting.rules', DEFAULT_SQL_RULES))) {
           const range = document.lineAt(document.positionAt(block.start).line).range;
           const query = {
-            text: runnableSql(text.slice(block.start, block.end)),
+            text: runnableSql(text.slice(block.start, block.end), `${block.tag} ${block.attribute}`,
+              /^pl/i.test(vscode.env.language) ? 'Wartości przekazywane przez aplikację: uzupełnij je przed uruchomieniem.' : undefined),
             file: document.uri.fsPath,
             name: `${block.tag}-${block.attribute}`
           };
-          if (editor) {
-            lenses.push(new vscode.CodeLens(range, { title: `$(database) Open ${block.attribute} in SQL editor`, command: 'csharpShooter.sql.openQuery', arguments: [query] }));
-          }
           lenses.push(new vscode.CodeLens(range, {
-            title: editor ? 'Open in SQL Server Management Studio' : `$(database) Open ${block.attribute} in SQL Server Management Studio`,
+            title: `$(database) Open ${block.attribute} in SQL Server Management Studio`,
             command: 'csharpRazorTagHelpers.openSqlInSsms',
             arguments: [query]
           }));
@@ -1122,6 +1121,78 @@ function registerSqlCodeLens(context) {
       }
     })
   );
+}
+
+function registerSqlDiagnostics(context) {
+  const collection = vscode.languages.createDiagnosticCollection('csharpRazorTagHelpers.sql');
+  const timers = new Map(); // document uri -> pending check
+  const runs = new Map(); // document uri -> the latest check's number, so an older one's answer is dropped
+
+  async function check(document) {
+    const key = document.uri.toString();
+    const run = (runs.get(key) || 0) + 1;
+    runs.set(key, run);
+    const cfg = vscode.workspace.getConfiguration('csharpRazorTagHelpers', document.uri);
+    if (!cfg.get('sqlDiagnostics.enabled', true) || !vscode.extensions.getExtension(SQL_EXTENSION)) {
+      collection.delete(document.uri);
+      return;
+    }
+    const text = document.getText();
+    const version = document.version;
+    const blocks = collectSqlRanges(text, cfg.get('sqlHighlighting.rules', DEFAULT_SQL_RULES));
+    let answers;
+    try {
+      // every block of the page at once: each answer comes in a few milliseconds
+      answers = await Promise.all(blocks.map((block) =>
+        vscode.commands.executeCommand('csharpShooter.sql.checkQuery', checkedSql(text.slice(block.start, block.end)))));
+    } catch {
+      return; // CSharpShooter SQL not ready: nothing said
+    }
+    if (runs.get(key) !== run || document.version !== version) return;
+    const found = [];
+    for (const [i, block] of blocks.entries()) {
+      const raw = text.slice(block.start, block.end);
+      for (const e of answers[i] || []) {
+        const start = block.start + sourceOffset(raw, e.line, e.character);
+        const end = Math.max(start + 1, block.start + sourceOffset(raw, e.endLine, e.endCharacter));
+        const d = new vscode.Diagnostic(new vscode.Range(document.positionAt(start), document.positionAt(end)),
+          e.message, vscode.DiagnosticSeverity.Error);
+        d.source = `SQL (${block.tag} ${block.attribute})`;
+        found.push(d);
+      }
+    }
+    if (runs.get(key) === run && !document.isClosed) collection.set(document.uri, found);
+  }
+
+  function schedule(document, ms) {
+    if (!isRazorDocument(document)) return;
+    const key = document.uri.toString();
+    clearTimeout(timers.get(key));
+    timers.set(key, setTimeout(() => {
+      timers.delete(key);
+      check(document);
+    }, ms));
+  }
+
+  // CSharpShooter SQL woken now, so its checker has started by the time a page is checked.
+  const sql = vscode.extensions.getExtension(SQL_EXTENSION);
+  if (sql && !sql.isActive) Promise.resolve(sql.activate()).catch(() => {});
+
+  context.subscriptions.push(
+    collection,
+    vscode.workspace.onDidOpenTextDocument((d) => schedule(d, 0)),
+    vscode.workspace.onDidChangeTextDocument((e) => schedule(e.document, 250)),
+    vscode.workspace.onDidCloseTextDocument((d) => {
+      clearTimeout(timers.get(d.uri.toString()));
+      runs.delete(d.uri.toString());
+      collection.delete(d.uri);
+    }),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('csharpRazorTagHelpers')) vscode.workspace.textDocuments.forEach((d) => schedule(d, 300));
+    }),
+    vscode.extensions.onDidChange(() => vscode.workspace.textDocuments.forEach((d) => schedule(d, 300)))
+  );
+  vscode.workspace.textDocuments.forEach((d) => schedule(d, 300));
 }
 
 function registerOutline(context) {

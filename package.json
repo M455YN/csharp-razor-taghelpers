@@ -199,7 +199,12 @@
         "csharpRazorTagHelpers.sqlCodeLens.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Show 'Open in SQL editor' and 'Open in SQL Server Management Studio' above each Tag Helper attribute holding SQL (the attributes of sqlHighlighting.rules). The SQL editor's lens needs the CSharpShooter SQL extension."
+          "description": "Show 'Open in SQL Server Management Studio' above each Tag Helper attribute holding SQL (the attributes of sqlHighlighting.rules)."
+        },
+        "csharpRazorTagHelpers.sqlDiagnostics.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Underline the syntax errors of the SQL in Tag Helper attributes (the attributes of sqlHighlighting.rules), as you type, with no connection to a server. Needs the CSharpShooter SQL extension, whose SQL Tools Service checks it."
         },
         "csharpRazorTagHelpers.sqlHighlighting.rules": {
           "type": "array",
