@@ -91,7 +91,8 @@ function openInSsms(text, name, connectionString) {
   const dir = path.join(os.tmpdir(), 'csharpshooter-sql');
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `${String(name || 'query').replace(/[^\w.-]+/g, '-')}.sql`);
-  fs.writeFileSync(file, text);
+  // One kind of line end (CRLF, as SSMS saves), or SSMS asks to normalize them: the page's and the added DECLAREs' differ.
+  fs.writeFileSync(file, String(text).replace(/\r?\n/g, '\r\n'));
   require('child_process').spawn(exe, [file, ...ssmsArguments(connectionString), '-nosplash'], { detached: true, stdio: 'ignore' }).unref();
   return { file };
 }
