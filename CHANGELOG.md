@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Open SQL from a Tag Helper:** CodeLens above each attribute holding SQL (the `sqlHighlighting.rules` attributes, e.g. `select`, `insert`) opens it as a runnable query: the verbatim string's `""` made `"`, and a `declare` for each variable the app passes in (typed by name, a table for one read `from`/`join`). *Open in SQL Server Management Studio* saves it to `%TEMP%\csharpshooter-sql` and starts the newest SSMS on it with `-S`, `-d`, `-U`/`-A`, `-C`, `-N` from a connection string of the nearest `appsettings*.json` above the page (never the password); *Open in SQL editor* opens it in CSharpShooter SQL's query window when that extension is installed. `sqlCodeLens.enabled` turns them off.
+
 ## [1.4.2] - 2026-08-31
 
 ### Fixed

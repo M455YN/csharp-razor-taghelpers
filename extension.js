@@ -3,6 +3,8 @@ const path = require('path');
 const { computeTagHelperFoldingRanges, findAttributeContext, resolveSelectableAttribute } = require('./folding');
 const { resolveTagHelperDefinitions } = require('./definition');
 const { collectSqlRanges, DEFAULT_SQL_RULES } = require('./sqlHighlight');
+const { runnableSql } = require('./sqlQuery');
+const { projectConnections, openInSsms } = require('./ssms');
 const { collectOutline } = require('./outline');
 const { collectDiagnostics } = require('./diagnostics');
 const { registerWhatsNew } = require('./whatsNew');
@@ -645,6 +647,7 @@ async function activate(context) {
   registerAttributeSelection(context);
   registerGoToDefinition(context);
   registerSqlHighlighting(context);
+  registerSqlCodeLens(context);
   registerOutline(context);
   registerDiagnostics(context);
   registerInlayHints(context);
@@ -1060,6 +1063,65 @@ function registerSqlHighlighting(context) {
   );
 
   schedule();
+}
+
+// The SQL of a Tag Helper's attribute opened as a query, with a DECLARE for what the app passes in, on a connection string
+// of the page's project: in SQL Server Management Studio, and in CSharpShooter SQL's query window when it is installed.
+const SQL_EXTENSION = 'M455YN.csharpshooter-sql';
+
+async function openSqlInSsms(query) {
+  const connections = projectConnections(query.file);
+  let chosen = connections[0];
+  if (connections.length > 1) {
+    const item = await vscode.window.showQuickPick(
+      connections.map((c) => ({ label: c.name, description: c.file, detail: c.connectionString.replace(/((?:password|pwd)\s*=\s*)("[^"]*"|'[^']*'|[^;]*)/gi, '$1********'), c })),
+      { placeHolder: 'Connection string to open the query on' }
+    );
+    if (!item) return undefined;
+    chosen = item.c;
+  }
+  const opened = openInSsms(query.text, query.name, chosen && chosen.connectionString);
+  if (opened.error) vscode.window.showErrorMessage(opened.error);
+  return opened.file;
+}
+
+function registerSqlCodeLens(context) {
+  const changed = new vscode.EventEmitter();
+  context.subscriptions.push(
+    changed,
+    vscode.commands.registerCommand('csharpRazorTagHelpers.openSqlInSsms', openSqlInSsms),
+    vscode.extensions.onDidChange(() => changed.fire()),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('csharpRazorTagHelpers')) changed.fire();
+    }),
+    vscode.languages.registerCodeLensProvider(razorSelector(), {
+      onDidChangeCodeLenses: changed.event,
+      provideCodeLenses(document) {
+        const cfg = vscode.workspace.getConfiguration('csharpRazorTagHelpers', document.uri);
+        if (!cfg.get('sqlCodeLens.enabled', true)) return [];
+        const editor = !!vscode.extensions.getExtension(SQL_EXTENSION);
+        const text = document.getText();
+        const lenses = [];
+        for (const block of collectSqlRanges(text, cfg.get('sqlHighlighting.rules', DEFAULT_SQL_RULES))) {
+          const range = document.lineAt(document.positionAt(block.start).line).range;
+          const query = {
+            text: runnableSql(text.slice(block.start, block.end)),
+            file: document.uri.fsPath,
+            name: `${block.tag}-${block.attribute}`
+          };
+          if (editor) {
+            lenses.push(new vscode.CodeLens(range, { title: `$(database) Open ${block.attribute} in SQL editor`, command: 'csharpShooter.sql.openQuery', arguments: [query] }));
+          }
+          lenses.push(new vscode.CodeLens(range, {
+            title: editor ? 'Open in SQL Server Management Studio' : `$(database) Open ${block.attribute} in SQL Server Management Studio`,
+            command: 'csharpRazorTagHelpers.openSqlInSsms',
+            arguments: [query]
+          }));
+        }
+        return lenses;
+      }
+    })
+  );
 }
 
 function registerOutline(context) {

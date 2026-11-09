@@ -196,6 +196,11 @@
           "default": true,
           "description": "Highlight SQL inside configured Tag Helper attribute values."
         },
+        "csharpRazorTagHelpers.sqlCodeLens.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show 'Open in SQL editor' and 'Open in SQL Server Management Studio' above each Tag Helper attribute holding SQL (the attributes of sqlHighlighting.rules). The SQL editor's lens needs the CSharpShooter SQL extension."
+        },
         "csharpRazorTagHelpers.sqlHighlighting.rules": {
           "type": "array",
           "description": "Which Tag Helper elements and attributes get SQL highlighting. tag can be a helper name (e.g. grid) or * for any element. attributes is a list of kebab-case names, or * for every attribute of that tag.",
@@ -293,7 +298,7 @@
   ],
   "scripts": {
     "lint": "echo \"No lint configured\"",
-    "test": "node test/folding.test.js && node test/definition.test.js && node test/sql.test.js && node test/outline-diagnostics.test.js && node test/inlayHints.test.js && node test/whatsNew.test.js && node test/scan.test.js"
+    "test": "node test/folding.test.js && node test/definition.test.js && node test/sql.test.js && node test/sqlQuery.test.js && node test/ssms.test.js && node test/outline-diagnostics.test.js && node test/inlayHints.test.js && node test/whatsNew.test.js && node test/scan.test.js"
   },
   "license": "MIT",
   "bugs": {
