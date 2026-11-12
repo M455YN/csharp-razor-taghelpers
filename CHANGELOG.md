@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-11-12
+
 ### Added
 
 - **Saved in SSMS, back in the page:** each save (Ctrl+S) of a query opened with *Open … in SQL Server Management Studio* puts it back into its attribute: the part under the line ending the declares (so values given to them stay in SSMS), the C# string's quotes doubled again, the attribute's own blank lines kept, as an edit of the page left unsaved (Ctrl+Z undoes it). If the attribute was changed in VS Code meanwhile it asks first; an attribute gone, that line deleted, an interpolated string (`$@"..."`) or a quote the attribute cannot hold leave the page as it is and say why.
