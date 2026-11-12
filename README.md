@@ -100,6 +100,12 @@ provides improved editor assistance when working with them.
     `from`), to be given values. SSMS connects with the server, database
     and login of a connection string of the nearest `appsettings*.json`
     above the page (asked when several; the password is never passed).
+    Each save of that query in SSMS puts it back into the attribute (the
+    declares and their values left out, the `""` doubled again), the page
+    left unsaved; it asks first if the attribute was changed meanwhile
+    (`csharpRazorTagHelpers.sqlSsmsSyncBack` turns it off). SSMS logs in
+    with Windows authentication by default; `sqlSsmsAuthentication` set to
+    `connectionString` logs in as the connection string says.
     Turn off with `csharpRazorTagHelpers.sqlCodeLens.enabled`
 -   With the **CSharpShooter SQL** extension installed, the SQL's syntax
     errors are underlined as you type, from its SQL Tools Service, with no

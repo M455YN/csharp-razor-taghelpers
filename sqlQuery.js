@@ -53,4 +53,26 @@ function sourceOffset(raw, line, character) {
   return i;
 }
 
-module.exports = { runnableSql, checkedSql, sourceOffset };
+/** The line runnableSql puts between the DECLAREs and the query. */
+const SEPARATOR = /^-- -{70} .*$/m;
+
+/** The query saved in SSMS put back as the attribute's value, the reverse of runnableSql: what is above the separator
+ *  (the note and the DECLAREs, with any values given there) left out, the C# string's quotes doubled again, and the
+ *  attribute's own leading and trailing blank lines kept. opener is the page's text just before the value ('@"' for
+ *  select=@(@"...")). { text }, or { error } where it cannot be put back safely: 'interpolated' ($@"..." has C# in
+ *  braces), 'separator' (the DECLAREs' end line was deleted), 'quote' (a quote the attribute's own quotes cannot hold). */
+function attributeFromSaved(saved, original, opener) {
+  if (/\$/.test(opener)) return { error: 'interpolated' };
+  let sql = String(saved);
+  if (sql.charCodeAt(0) === 0xfeff) sql = sql.slice(1); // SSMS may save with a BOM
+  const hadHeader = runnableSql(original) !== `${checkedSql(original).trim()}\n`;
+  const separator = SEPARATOR.exec(sql);
+  if (hadHeader && !separator) return { error: 'separator' };
+  if (separator) sql = sql.slice(separator.index + separator[0].length);
+  sql = sql.replace(/\r\n?/g, '\n').replace(/^\s*\n/, '').replace(/\s+$/, '');
+  if (/@"$/.test(opener)) sql = sql.replace(/"/g, '""');
+  else if (/["']$/.test(opener) && sql.includes(opener.slice(-1))) return { error: 'quote' };
+  return { text: /^\s*/.exec(original)[0] + sql + /\s*$/.exec(original)[0] };
+}
+
+module.exports = { runnableSql, checkedSql, sourceOffset, attributeFromSaved };

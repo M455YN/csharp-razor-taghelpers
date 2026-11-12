@@ -201,6 +201,24 @@
           "default": true,
           "description": "Show 'Open in SQL Server Management Studio' above each Tag Helper attribute holding SQL (the attributes of sqlHighlighting.rules)."
         },
+        "csharpRazorTagHelpers.sqlSsmsSyncBack": {
+          "type": "boolean",
+          "default": true,
+          "description": "Put a query opened with Open … in SQL Server Management Studio back into its Tag Helper attribute each time it is saved in SSMS (the page edited, not saved)."
+        },
+        "csharpRazorTagHelpers.sqlSsmsAuthentication": {
+          "type": "string",
+          "enum": [
+            "windows",
+            "connectionString"
+          ],
+          "enumDescriptions": [
+            "Windows authentication (NTLM/Kerberos): only the server, database and encryption are taken from the connection string.",
+            "As the connection string says: its SQL Server login (SSMS asks for the password) or Microsoft Entra ID authentication."
+          ],
+          "default": "windows",
+          "description": "How SQL Server Management Studio logs in when it opens a Tag Helper's query."
+        },
         "csharpRazorTagHelpers.sqlDiagnostics.enabled": {
           "type": "boolean",
           "default": true,

@@ -3,8 +3,8 @@ const path = require('path');
 const { computeTagHelperFoldingRanges, findAttributeContext, resolveSelectableAttribute } = require('./folding');
 const { resolveTagHelperDefinitions } = require('./definition');
 const { collectSqlRanges, DEFAULT_SQL_RULES } = require('./sqlHighlight');
-const { runnableSql, checkedSql, sourceOffset } = require('./sqlQuery');
-const { projectConnections, openInSsms } = require('./ssms');
+const { runnableSql, checkedSql, sourceOffset, attributeFromSaved } = require('./sqlQuery');
+const { projectConnections, openInSsms, watchSaved } = require('./ssms');
 const { collectOutline } = require('./outline');
 const { collectDiagnostics } = require('./diagnostics');
 const { registerWhatsNew } = require('./whatsNew');
@@ -1082,9 +1082,69 @@ async function openSqlInSsms(query) {
     if (!item) return undefined;
     chosen = item.c;
   }
-  const opened = openInSsms(query.text, query.name, chosen && chosen.connectionString);
+  const cfg = vscode.workspace.getConfiguration('csharpRazorTagHelpers', vscode.Uri.file(query.file));
+  const opened = openInSsms(query.text, query.name, chosen && chosen.connectionString, cfg.get('sqlSsmsAuthentication', 'windows'));
   if (opened.error) vscode.window.showErrorMessage(opened.error);
+  else watchSsmsSaves(opened.file, query);
   return opened.file;
+}
+
+// Each save of a query in SSMS put back into its attribute (the page edited, not saved, Ctrl+Z undoing it).
+const ssmsWatches = new Map(); // .sql file -> its watch, the latest query opened in it
+function watchSsmsSaves(file, query) {
+  ssmsWatches.get(file)?.dispose();
+  const source = { ...query, current: query.original };
+  ssmsWatches.set(file, watchSaved(file, (saved) => {
+    // sqlSsmsSyncBack read at each save, so turning it off stops the queries already open too
+    if (!vscode.workspace.getConfiguration('csharpRazorTagHelpers', vscode.Uri.file(source.file)).get('sqlSsmsSyncBack', true)) return;
+    putBackFromSsms(source, saved).catch((e) => outputChannel?.appendLine(String(e?.stack || e)));
+  }));
+}
+
+/** The page's attribute the query came from: the index-th of the page's attributes of that tag and name. */
+function sqlBlockOf(document, source) {
+  const cfg = vscode.workspace.getConfiguration('csharpRazorTagHelpers', document.uri);
+  return collectSqlRanges(document.getText(), cfg.get('sqlHighlighting.rules', DEFAULT_SQL_RULES))
+    .filter((b) => b.tag === source.tag && b.attribute === source.attribute)[source.index];
+}
+
+async function putBackFromSsms(source, saved) {
+  const uri = vscode.Uri.file(source.file);
+  const where = `${source.tag} ${source.attribute} in ${path.basename(source.file)}`;
+  const back = attributeFromSaved(saved, source.original, source.opener);
+  if (back.error) {
+    const why = {
+      interpolated: `${where} is an interpolated string ($@"..."), so the query saved in SQL Server Management Studio is not put back.`,
+      separator: `The line ending the declares (-- ---- ${source.tag} ${source.attribute}) was removed in SQL Server Management Studio, so the query saved there was not put back in ${path.basename(source.file)}.`,
+      quote: `The query saved in SQL Server Management Studio has a quote that the quotes of ${where} cannot hold, so it was not put back.`
+    }[back.error];
+    vscode.window.showWarningMessage(why);
+    return;
+  }
+  const document = await vscode.workspace.openTextDocument(uri);
+  const block = sqlBlockOf(document, source);
+  if (!block) {
+    vscode.window.showWarningMessage(`${where} is no longer there: the query saved in SQL Server Management Studio was not put back.`);
+    return;
+  }
+  const now = document.getText().slice(block.start, block.end);
+  if (now === back.text) {
+    source.current = now;
+    return;
+  }
+  if (now !== source.current) {
+    const replace = 'Replace';
+    const answer = await vscode.window.showWarningMessage(
+      `${where} was changed in VS Code after it was opened in SQL Server Management Studio. Replace it with the query saved there?`,
+      { modal: true }, replace);
+    if (answer !== replace) return;
+  }
+  const edit = new vscode.WorkspaceEdit();
+  edit.replace(uri, new vscode.Range(document.positionAt(block.start), document.positionAt(block.end)), back.text);
+  if (!(await vscode.workspace.applyEdit(edit))) return;
+  const after = sqlBlockOf(document, source);
+  source.current = after ? document.getText().slice(after.start, after.end) : back.text;
+  vscode.window.setStatusBarMessage(`$(database) ${where}: the query saved in SQL Server Management Studio is in the page`, 5000);
 }
 
 function registerSqlCodeLens(context) {
@@ -1103,10 +1163,20 @@ function registerSqlCodeLens(context) {
         if (!cfg.get('sqlCodeLens.enabled', true)) return [];
         const text = document.getText();
         const lenses = [];
+        const seen = new Map(); // tag + attribute -> how many of them came before, to find this one again on a save
         for (const block of collectSqlRanges(text, cfg.get('sqlHighlighting.rules', DEFAULT_SQL_RULES))) {
           const range = document.lineAt(document.positionAt(block.start).line).range;
+          const key = `${block.tag} ${block.attribute}`;
+          const index = seen.get(key) || 0;
+          seen.set(key, index + 1);
+          const original = text.slice(block.start, block.end);
           const query = {
-            text: runnableSql(text.slice(block.start, block.end), `${block.tag} ${block.attribute}`,
+            tag: block.tag,
+            attribute: block.attribute,
+            index,
+            original,
+            opener: text.slice(Math.max(0, block.start - 3), block.start),
+            text: runnableSql(original, key,
               /^pl/i.test(vscode.env.language) ? 'Wartości przekazywane przez aplikację: uzupełnij je przed uruchomieniem.' : undefined),
             file: document.uri.fsPath,
             name: `${block.tag}-${block.attribute}`
