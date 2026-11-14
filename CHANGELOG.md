@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-14
+
+### Changed
+
+- **Open … in SQL Server Management Studio** sends the query to an SSMS already running as a tab of its own, as a double-click on a `.sql` file hands it over (the file association's DDE), where each query started an SSMS of its own; that tab takes the running SSMS's connection. With no SSMS running, one starts connected by the project's connection string, as before.
+
+
 ## [1.6.0] - 2026-11-12
 
 ### Added

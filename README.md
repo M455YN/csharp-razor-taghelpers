@@ -94,7 +94,8 @@ provides improved editor assistance when working with them.
 ### SQL in SQL Server Management Studio, and its syntax errors
 
 -   **Open … in SQL Server Management Studio** above each of those
-    attributes opens its SQL in the newest SSMS installed, runnable: the
+    attributes opens its SQL in SSMS (as a tab of the one already running,
+    else the newest installed, started connected), runnable: the
     C# string's `""` made `"`, and a `declare` for each variable the app
     passes in (`@UserEmployeeId`, `@$DateFrom`, a table for one read
     `from`), to be given values. SSMS connects with the server, database

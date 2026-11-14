@@ -102,8 +102,21 @@ function openInSsms(text, name, connectionString, login = 'windows') {
   const file = path.join(dir, `${String(name || 'query').replace(/[^\w.-]+/g, '-')}.sql`);
   // One kind of line end (CRLF, as SSMS saves), or SSMS asks to normalize them: the page's and the added DECLAREs' differ.
   fs.writeFileSync(file, String(text).replace(/\r?\n/g, '\r\n'));
-  require('child_process').spawn(install.exe, [file, ...ssmsArguments(connectionString, login), '-nosplash'], { detached: true, stdio: 'ignore' }).unref();
+  const { spawn } = require('child_process');
+  // A running SSMS gets the file as a tab, the way a double-click does: the .sql association hands it over by DDE
+  // (Open("%1") to SSMS's /dde). Its switches would start a new window, so that tab takes SSMS's own connection.
+  if (ssmsRunning()) spawn('explorer.exe', [file], { detached: true, stdio: 'ignore' }).unref();
+  else spawn(install.exe, [file, ...ssmsArguments(connectionString, login), '-nosplash'], { detached: true, stdio: 'ignore' }).unref();
   return { file };
+}
+
+/** Whether an SSMS is running. */
+function ssmsRunning() {
+  try {
+    return /^"ssms\.exe"/im.test(require('child_process').execFileSync('tasklist', ['/FI', 'IMAGENAME eq ssms.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true, timeout: 5000 }));
+  } catch {
+    return false;
+  }
 }
 
 // The .sql files opened in SSMS, watched for its saves: one watcher on their folder (SSMS may save by replacing the file).
